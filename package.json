@@ -1,1 +1,25 @@
-{"name":"isad-hub","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node server/index.js","dev":"vite --host 0.0.0.0","build":"vite build","test":"node --test","migrate":"node server/migrate.js","seed":"node server/seed.js"},"dependencies":{"pg":"^8.13.1","react":"^18.3.1","react-dom":"^18.3.1"},"devDependencies":{"vite":"^6.1.0"}}
+{
+  "name": "isad-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "test": "node --test",
+    "migrate": "node server/migrate.js",
+    "seed": "node server/seed.js",
+    "test:integration": "RUN_INTEGRATION=1 node --test test/integration.test.js",
+    "dev:api": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "pg": "^8.13.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "vite": "^6.1.0"
+  }
+}

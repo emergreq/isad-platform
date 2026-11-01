@@ -20,6 +20,9 @@ services:
     ports: ["127.0.0.1:3000:3000", "127.0.0.1:5173:5173"]
     depends_on:
       db: { condition: service_healthy }
-    command: sh -c "npm run migrate && npm start & npm run dev"
+    command: sh server/start.sh
+    volumes:
+      - .:/app
+      - /app/node_modules
 volumes:
   pgdata:

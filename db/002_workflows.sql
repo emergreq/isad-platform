@@ -1,0 +1,13 @@
+CREATE TABLE headman_assignments (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id integer NOT NULL REFERENCES users, group_id integer NOT NULL REFERENCES groups, starts_on date NOT NULL, ends_on date, CHECK(ends_on IS NULL OR ends_on>=starts_on), UNIQUE(user_id,group_id,starts_on));
+INSERT INTO headman_assignments(user_id,group_id,starts_on,ends_on) SELECT m.user_id,m.group_id,m.starts_on,m.ends_on FROM memberships m JOIN users u ON u.id=m.user_id WHERE u.role='headman';
+CREATE TABLE homework_versions (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, homework_id integer NOT NULL REFERENCES homework, snapshot jsonb NOT NULL, changed_by integer NOT NULL REFERENCES users, changed_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE debt_events (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, debt_id integer NOT NULL REFERENCES debts, actor_id integer NOT NULL REFERENCES users, event text NOT NULL, note text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE attendance_exports (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id integer NOT NULL REFERENCES users, offering_id integer NOT NULL REFERENCES offerings, from_date date NOT NULL, to_date date NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE material_history (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, material_id integer NOT NULL REFERENCES materials, version integer NOT NULL, title text NOT NULL, url text NOT NULL, changed_by integer NOT NULL REFERENCES users, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(material_id,version));
+CREATE TABLE application_events (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, application_id integer NOT NULL REFERENCES applications, actor_id integer NOT NULL REFERENCES users, status text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE schedule_imports (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, checksum text NOT NULL, entries jsonb NOT NULL, source_url text NOT NULL, created_by integer NOT NULL REFERENCES users, created_at timestamptz NOT NULL DEFAULT now(), published_at timestamptz);
+CREATE UNIQUE INDEX schedule_published_hash ON schedule_imports(checksum) WHERE published_at IS NOT NULL;
+CREATE INDEX membership_lookup ON memberships(user_id,group_id,starts_on,ends_on);
+CREATE INDEX sessions_offering_date ON sessions(offering_id,starts_at);
+CREATE INDEX application_role_status ON applications(role_id,status);
+CREATE INDEX debt_student_open ON debts(student_id,closed);
