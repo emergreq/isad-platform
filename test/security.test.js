@@ -1,0 +1,3 @@
+import {test} from 'node:test'; import assert from 'node:assert/strict'; import {hashPassword,verifyPassword,newToken,tokenHash} from '../server/security.js';
+test('password hashes use random salts and verify only the original password',async()=>{const a=await hashPassword('correct horse');const b=await hashPassword('correct horse');assert.notEqual(a,b);assert.equal(await verifyPassword('correct horse',a),true);assert.equal(await verifyPassword('wrong',a),false)});
+test('session tokens are random and stored as a digest',()=>{const a=newToken(),b=newToken();assert.notEqual(a,b);assert.notEqual(tokenHash(a),a);assert.equal(tokenHash(a),tokenHash(a))});
