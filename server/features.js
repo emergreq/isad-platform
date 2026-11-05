@@ -1,4 +1,6 @@
 import ExcelJS from "exceljs";
+import {instant,notify} from './mvp-utils.js';
+import {moveSession} from './reschedule.js';
 import { pool, transaction } from "./db.js";
 import { hashPassword } from "./security.js";
 import { fetchSchedule, SOURCE_URL } from "./schedule.js";
@@ -82,17 +84,17 @@ async function session(u, value, mode = "read", c = pool) {
     throw error(403, "Нет прав на журнал");
   const table = mode === "write" ? "headman_assignments" : "memberships";
   const a = await rows(
-    `SELECT 1 FROM ${table} WHERE user_id=$1 AND group_id=$2 AND starts_on<=($3::timestamptz AT TIME ZONE 'Europe/Moscow')::date AND (ends_on IS NULL OR ends_on>=($3::timestamptz AT TIME ZONE 'Europe/Moscow')::date)`,
-    [u.id, s.group_id, s.starts_at],
+    `SELECT 1 FROM ${table} WHERE user_id=$1 AND offering_has_group($2,group_id) AND starts_on<=($3::timestamptz AT TIME ZONE 'Europe/Moscow')::date AND (ends_on IS NULL OR ends_on>=($3::timestamptz AT TIME ZONE 'Europe/Moscow')::date)`,
+    [u.id, s.offering_id, s.starts_at],
     c,
   );
   if (!a.length) throw error(403, "Нет доступа к занятию");
   return s;
 }
-async function roster(s, c = pool) {
+async function roster(s, c = pool, actor = null) {
   return rows(
-    "SELECT DISTINCT u.id,u.name FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.group_id=$1 AND u.role IN ('student','headman') AND m.starts_on<=($2::timestamptz AT TIME ZONE 'Europe/Moscow')::date AND (m.ends_on IS NULL OR m.ends_on>=($2::timestamptz AT TIME ZONE 'Europe/Moscow')::date) ORDER BY u.name,u.id",
-    [s.group_id, s.starts_at],
+    "SELECT DISTINCT u.id,u.name FROM memberships m JOIN users u ON u.id=m.user_id WHERE offering_has_group($1,m.group_id) AND ($3::integer IS NULL OR EXISTS(SELECT 1 FROM headman_assignments ha WHERE ha.user_id=$3 AND ha.group_id=m.group_id AND ha.starts_on<=($2::timestamptz AT TIME ZONE 'Europe/Moscow')::date AND (ha.ends_on IS NULL OR ha.ends_on>=($2::timestamptz AT TIME ZONE 'Europe/Moscow')::date))) AND u.role IN ('student','headman') AND m.starts_on<=($2::timestamptz AT TIME ZONE 'Europe/Moscow')::date AND (m.ends_on IS NULL OR m.ends_on>=($2::timestamptz AT TIME ZONE 'Europe/Moscow')::date) ORDER BY u.name,u.id",
+    [s.offering_id, s.starts_at, actor?.role==='headman'?actor.id:null],
     c,
   );
 }
@@ -119,7 +121,7 @@ export async function features(req, res, u) {
   let m;
   if (method === "GET" && p === "/api/offerings")
     return rows(
-      `SELECT o.*,c.title,g.name group_name FROM offerings o JOIN courses c ON c.id=o.course_id JOIN groups g ON g.id=o.group_id WHERE $2='coordinator' OR o.teacher_id=$1 OR EXISTS(SELECT 1 FROM memberships m WHERE m.group_id=o.group_id AND m.user_id=$1) ORDER BY c.title`,
+      `SELECT o.*,c.title,g.name group_name,offering_group_names(o.id) group_names FROM offerings o JOIN courses c ON c.id=o.course_id JOIN groups g ON g.id=o.group_id WHERE $2='coordinator' OR o.teacher_id=$1 OR EXISTS(SELECT 1 FROM memberships m WHERE offering_has_group(o.id,m.group_id) AND m.user_id=$1 AND m.starts_on<=CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on>=CURRENT_DATE)) ORDER BY c.title`,
       [u.id, u.role],
     );
   if (method === "GET" && p === "/api/directory") {
@@ -308,6 +310,7 @@ export async function features(req, res, u) {
       await offering(u, s.offering_id, c);
       if (b.cancelled !== undefined && typeof b.cancelled !== "boolean")
         throw error(400, "Неверный статус");
+      if(b.starts_at&&new Date(b.starts_at).getTime()!==s.starts_at.getTime())await moveSession(c,s,u.id,date(b.starts_at),String(b.reason||'Изменено преподавателем').slice(0,1000));
       return (
         await rows(
           "UPDATE sessions SET title=$1,starts_at=$2,room=$3,cancelled=$4 WHERE id=$5 RETURNING *",
@@ -339,6 +342,7 @@ export async function features(req, res, u) {
         "INSERT INTO homework_versions(homework_id,snapshot,changed_by) VALUES($1,$2,$3)",
         [h.id, h, u.id],
       );
+      await notify(c,s.offering_id,'homework:'+h.id,'Новое задание: '+h.title,h.description,'homework',h.id);
       return h;
     });
   }
@@ -371,6 +375,7 @@ export async function features(req, res, u) {
         "INSERT INTO homework_versions(homework_id,snapshot,changed_by) VALUES($1,$2,$3)",
         [h.id, updated, u.id],
       );
+      await notify(c,s.offering_id,`homework-update:${h.id}:${Date.now()}`,'Изменено задание: '+updated.title,'Проверьте условие и срок','homework',h.id);
       return updated;
     });
   }
@@ -388,7 +393,7 @@ export async function features(req, res, u) {
   }
   if (method === "GET" && (m = match(/^\/api\/sessions\/(\d+)\/roster$/))) {
     const s = await session(u, m[1], "write");
-    const list = await roster(s);
+    const list = await roster(s,pool,u);
     const marks = await rows("SELECT * FROM attendance WHERE session_id=$1", [
       s.id,
     ]);
@@ -399,8 +404,8 @@ export async function features(req, res, u) {
       })),
       cancelled: s.cancelled,
       history: await rows(
-        "SELECT h.*,u.name actor FROM attendance_history h JOIN users u ON u.id=h.changed_by WHERE h.session_id=$1 ORDER BY h.id DESC",
-        [s.id],
+          "SELECT h.*,u.name actor FROM attendance_history h JOIN users u ON u.id=h.changed_by WHERE h.session_id=$1 AND ($2::integer[] IS NULL OR h.student_id=ANY($2::integer[])) ORDER BY h.id DESC",
+          [s.id,u.role==='headman'?list.map(student=>student.id):null],
       ),
     };
   }
@@ -412,7 +417,7 @@ export async function features(req, res, u) {
       ]);
       const s = await session(u, m[1], "write", c);
       if (s.cancelled) throw error(409, "Занятие отменено");
-      const list = await roster(s, c),
+      const list = await roster(s, c,u),
         student = id(b.student_id);
       if (!list.some((x) => x.id === student))
         throw error(400, "Студент не входил в состав группы на дату занятия");
@@ -452,58 +457,81 @@ export async function features(req, res, u) {
   if (method === "GET" && (m = match(/^\/api\/offerings\/(\d+)\/students$/))) {
     const o = await offering(u, m[1]);
     return rows(
-      "SELECT DISTINCT u.id,u.name FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.group_id=$1 AND u.role IN ('student','headman') ORDER BY u.name",
-      [o.group_id],
+      "SELECT DISTINCT ON (u.id) u.id,u.name,g.id group_id,g.name group_name FROM memberships m JOIN users u ON u.id=m.user_id JOIN groups g ON g.id=m.group_id WHERE offering_has_group($1,m.group_id) AND m.starts_on<=CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on>=CURRENT_DATE) AND u.role IN ('student','headman') ORDER BY u.id,m.starts_on DESC",
+      [o.id],
     );
   }
   if (method === "POST" && p === "/api/debts") {
     const b = await json(req),
       o = await offering(u, b.offering_id);
-    if (
-      !(
-        await rows(
-          "SELECT 1 FROM memberships WHERE user_id=$1 AND group_id=$2",
-          [id(b.student_id), o.group_id],
-        )
-      ).length
-    )
-      throw error(400, "Студент не обучался в группе");
-    return transaction(async (c) => {
-      const d = (
-        await rows(
-          "INSERT INTO debts(student_id,offering_id,reason,source,created_by) VALUES($1,$2,$3,$4,$5) RETURNING *",
-          [b.student_id, o.id, text(b.reason), text(b.source, 500), u.id],
-          c,
-        )
-      )[0];
-      await c.query(
-        "INSERT INTO debt_events(debt_id,actor_id,event,note) VALUES($1,$2,'created',$3)",
-        [d.id, u.id, b.source],
-      );
-      return d;
+    const students=[...new Set((Array.isArray(b.student_ids)?b.student_ids:[b.student_id]).map(id))];
+    if(!students.length||students.length>100)throw error(400,"Выберите от 1 до 100 студентов");
+    const reason=text(b.reason),source=text(b.source,500);
+    return transaction(async c=>{
+      const eligible=await rows("SELECT DISTINCT user_id FROM memberships m JOIN users u ON u.id=m.user_id WHERE user_id=ANY($1::int[]) AND offering_has_group($2,group_id) AND u.role IN ('student','headman')",[students,o.id],c);
+      if(eligible.length!==students.length)throw error(400,"Студент не обучался в группе");
+      const created=[];
+      for(const student of students){
+        const d=(await rows("INSERT INTO debts(student_id,offering_id,reason,source,created_by) VALUES($1,$2,$3,$4,$5) RETURNING *",[student,o.id,reason,source,u.id],c))[0];
+        await c.query("INSERT INTO debt_events(debt_id,actor_id,event,note) VALUES($1,$2,'created',$3)",[d.id,u.id,source]);
+        await c.query("INSERT INTO notifications(recipient_id,event_key,title,message,target_page,target_id) VALUES($1,$2,'Новая задолженность',$3,'debts',$4) ON CONFLICT DO NOTHING",[student,'debt:'+d.id,reason,d.id]);
+        created.push(d);
+      }
+      return Array.isArray(b.student_ids)?created:created[0];
     });
   }
   if (method === "GET" && p === "/api/debts")
     return rows(
-      "SELECT d.*,c.title course,u.name student FROM debts d JOIN offerings o ON o.id=d.offering_id JOIN courses c ON c.id=o.course_id JOIN users u ON u.id=d.student_id WHERE d.student_id=$1 OR (o.teacher_id=$1 AND $2='teacher') OR $2='coordinator' ORDER BY d.id DESC",
+      "SELECT d.*,c.title course,u.name student,(SELECT g.name FROM memberships mm JOIN groups g ON g.id=mm.group_id WHERE mm.user_id=d.student_id ORDER BY mm.starts_on DESC LIMIT 1) group_name FROM debts d JOIN offerings o ON o.id=d.offering_id JOIN courses c ON c.id=o.course_id JOIN users u ON u.id=d.student_id WHERE d.student_id=$1 OR (o.teacher_id=$1 AND $2='teacher') OR $2='coordinator' ORDER BY d.id DESC",
       [u.id, u.role],
     );
   if (method === "POST" && p === "/api/retakes") {
     const b = await json(req),
       o = await offering(u, b.offering_id);
-    return (
-      await rows(
-        "INSERT INTO retakes(offering_id,starts_at,room,capacity) VALUES($1,$2,$3,$4) RETURNING *",
-        [o.id, date(b.starts_at), text(b.room, 200), id(b.capacity)],
-      )
-    )[0];
+    const kind=b.kind||'retake',start=instant(b.starts_at);
+    if(!['retake','debt_day'].includes(kind))throw error(400,'Выберите тип встречи');
+    if(new Date(start)<=new Date())throw error(400,'Выберите будущую дату');
+    const debtIds=[...new Set((Array.isArray(b.debt_ids)?b.debt_ids:[]).map(id))].sort((a,b)=>a-b);
+    if(!debtIds.length||debtIds.length>1000)throw error(400,'Выберите студентов с открытыми задолженностями');
+    return transaction(async c=>{
+      const debts=await rows('SELECT * FROM debts WHERE id=ANY($1::int[]) AND offering_id=$2 AND NOT closed ORDER BY id FOR UPDATE',[debtIds,o.id],c);
+      if(debts.length!==debtIds.length)throw error(400,'Выберите открытые долги по своему предмету');
+      if(kind==='retake'&&(await rows("SELECT 1 FROM retake_registrations x JOIN retakes r ON r.id=x.retake_id WHERE x.debt_id=ANY($1::int[]) AND x.result IS NULL AND r.status='scheduled' AND r.kind='retake'",[debtIds],c)).length)throw error(409,'У выбранного студента уже назначена пересдача по этому долгу');
+      const capacity=kind==='retake'?debtIds.length:id(b.capacity);
+      const r=(await rows("INSERT INTO retakes(offering_id,starts_at,room,capacity,kind) VALUES($1,$2,$3,$4,$5) RETURNING *",[o.id,start,text(b.room,200),capacity,kind],c))[0];
+      await c.query('INSERT INTO retake_eligibility(retake_id,debt_id) SELECT $1,unnest($2::int[])',[r.id,debtIds]);
+      if(kind==='retake'){
+        await c.query('INSERT INTO retake_registrations(retake_id,debt_id) SELECT $1,unnest($2::int[])',[r.id,debtIds]);
+        await c.query("INSERT INTO debt_events(debt_id,actor_id,event,note) SELECT unnest($1::int[]),$2,'registered',$3",[debtIds,u.id,'Назначена пересдача '+r.id]);
+      }
+      await c.query("INSERT INTO notifications(recipient_id,event_key,title,message,target_page,target_id) SELECT DISTINCT d.student_id,$2,$3,$4,'debts',$1::integer FROM debts d WHERE d.id=ANY($5::int[]) ON CONFLICT DO NOTHING",[r.id,'retake-day:'+r.id,kind==='debt_day'?'Открыта запись на сдачу долгов':'Вам назначена пересдача',new Date(start).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'})+' · '+r.room,debtIds]);
+      return r;
+    });
+  }
+  if(method==='POST'&&(m=match(/^\/api\/retakes\/(\d+)\/(cancel|move)$/))){
+    const b=await json(req),reason=text(b.reason,1000),move=m[2]==='move';
+    return transaction(async c=>{
+      const r=(await rows('SELECT * FROM retakes WHERE id=$1 FOR UPDATE',[id(m[1])],c))[0];
+      if(!r)throw error(404,'Встреча не найдена');await offering(u,r.offering_id,c);
+      if(r.status==='cancelled')throw error(409,'Встреча уже отменена');
+      if(r.starts_at<=new Date()||(await rows('SELECT 1 FROM retake_registrations WHERE retake_id=$1 AND result IS NOT NULL',[r.id],c)).length)throw error(409,'Начавшуюся встречу изменять нельзя');
+      const start=move?instant(b.starts_at):null,room=move?text(b.room,200):r.room;
+      if(move&&new Date(start)<=new Date())throw error(400,'Выберите будущую дату');
+      await c.query(move?"UPDATE retakes SET previous_starts_at=starts_at,starts_at=$2,room=$3,change_reason=$4,revision=revision+1 WHERE id=$1":"UPDATE retakes SET status='cancelled',change_reason=$2,revision=revision+1 WHERE id=$1",move?[r.id,start,room,reason]:[r.id,reason]);
+      const title=r.kind==='debt_day'?(move?'День сдачи долгов перенесён':'День сдачи долгов отменён'):(move?'Пересдача перенесена':'Пересдача отменена');
+      const message=move?new Date(start).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'})+' · '+room+' · '+reason:reason;
+      await c.query("INSERT INTO notifications(recipient_id,event_key,title,message,target_page,target_id) SELECT DISTINCT d.student_id,$2,$3,$4,'debts',$1::integer FROM retake_registrations x JOIN debts d ON d.id=x.debt_id WHERE x.retake_id=$1 ON CONFLICT DO NOTHING",[r.id,`retake-change:${r.id}:${r.revision+1}`,title,message]);
+      await c.query("INSERT INTO audit_events(actor_id,object_type,object_id,action,detail) VALUES($1,'retake',$2,$3,$4)",[u.id,r.id,move?'move':'cancel',JSON.stringify({reason,previous_starts_at:r.starts_at,starts_at:start,room})]);
+      return {ok:true};
+    });
   }
   if (method === "GET" && p === "/api/retakes")
     return rows(
-      `SELECT r.*,c.title course,(SELECT count(*)::int FROM retake_registrations x WHERE x.retake_id=r.id) booked FROM retakes r JOIN offerings o ON o.id=r.offering_id JOIN courses c ON c.id=o.course_id WHERE o.teacher_id=$1 AND $2='teacher' OR $2='coordinator' OR EXISTS(SELECT 1 FROM debts d WHERE d.offering_id=o.id AND d.student_id=$1) ORDER BY r.starts_at`,
+      `SELECT r.*,c.title course,(SELECT count(*)::int FROM retake_registrations x WHERE x.retake_id=r.id) booked,COALESCE((SELECT json_agg(e.debt_id) FROM retake_eligibility e JOIN debts d ON d.id=e.debt_id WHERE e.retake_id=r.id AND (d.student_id=$1 OR o.teacher_id=$1 OR $2='coordinator')),'[]') eligible_debt_ids FROM retakes r JOIN offerings o ON o.id=r.offering_id JOIN courses c ON c.id=o.course_id WHERE o.teacher_id=$1 AND $2='teacher' OR $2='coordinator' OR (r.kind='debt_day' AND EXISTS(SELECT 1 FROM retake_eligibility e JOIN debts d ON d.id=e.debt_id WHERE e.retake_id=r.id AND d.student_id=$1)) OR (r.kind='retake' AND EXISTS(SELECT 1 FROM retake_registrations x JOIN debts d ON d.id=x.debt_id WHERE x.retake_id=r.id AND d.student_id=$1)) ORDER BY r.starts_at`,
       [u.id, u.role],
     );
   if (method === "POST" && (m = match(/^\/api\/retakes\/(\d+)\/register$/))) {
+    if(!["student","headman"].includes(u.role))throw error(403,"Студент записывается самостоятельно");
     const b = await json(req);
     return transaction(async (c) => {
       const r = (
@@ -514,26 +542,30 @@ export async function features(req, res, u) {
         )
       )[0];
       if (!r) throw error(404, "Пересдача не найдена");
+      if(r.kind!=='debt_day')throw error(403,"На пересдачу назначает преподаватель");
       const d = (
         await rows(
-          "SELECT * FROM debts WHERE id=$1 AND student_id=$2 FOR UPDATE",
-          [id(b.debt_id), u.id],
+          "SELECT * FROM debts WHERE id=$1 FOR UPDATE",
+          [id(b.debt_id)],
           c,
         )
       )[0];
+      if(d&&d.student_id!==u.id)throw error(400,"Нужна ваша открытая задолженность по этому предмету");
       if (!d || d.offering_id !== r.offering_id || d.closed)
-        throw error(400, "Нужна ваша открытая задолженность по этому предмету");
-      if (r.starts_at <= new Date()) throw error(409, "Пересдача уже началась");
+        throw error(400, "Нужна открытая задолженность по этому предмету");
+      if(!(await rows('SELECT 1 FROM retake_eligibility WHERE retake_id=$1 AND debt_id=$2',[r.id,d.id],c)).length)throw error(403,'Вы не включены в список должников на этот день');
+      if(r.status==='cancelled')throw error(409,"Встреча отменена");
+      if (r.starts_at <= new Date()) throw error(409, "Встреча уже началась");
       if (
         (
           await rows(
-            "SELECT 1 FROM retake_registrations WHERE debt_id=$1 AND result IS NULL",
+            "SELECT 1 FROM retake_registrations x JOIN retakes r ON r.id=x.retake_id WHERE x.debt_id=$1 AND x.result IS NULL AND r.status='scheduled' AND r.kind='debt_day'",
             [d.id],
             c,
           )
         ).length
       )
-        throw error(409, "Вы уже записаны на пересдачу");
+        throw error(409, "Вы уже записаны на сдачу этого долга");
       const count = (
         await rows(
           "SELECT count(*)::int n FROM retake_registrations WHERE retake_id=$1",
@@ -550,24 +582,43 @@ export async function features(req, res, u) {
         "INSERT INTO debt_events(debt_id,actor_id,event,note) VALUES($1,$2,'registered',$3)",
         [d.id, u.id, `Пересдача ${r.id}`],
       );
+      await c.query("INSERT INTO notifications(recipient_id,event_key,title,message,target_page,target_id) VALUES($1,$2,$5,$3,'debts',$4) ON CONFLICT DO NOTHING",[d.student_id,`retake:${r.id}:${d.id}`,new Date(r.starts_at).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'})+' · '+r.room,r.id,r.kind==='debt_day'?'Запись на сдачу долгов':'Запись на пересдачу']);
       return { ok: true };
     });
   }
   if (method === "GET" && p === "/api/registrations")
     return rows(
-      "SELECT x.*,d.student_id,u.name student,r.starts_at,r.offering_id,c.title course FROM retake_registrations x JOIN debts d ON d.id=x.debt_id JOIN users u ON u.id=d.student_id JOIN retakes r ON r.id=x.retake_id JOIN offerings o ON o.id=r.offering_id JOIN courses c ON c.id=o.course_id WHERE d.student_id=$1 OR (o.teacher_id=$1 AND $2='teacher') OR $2='coordinator' ORDER BY r.starts_at",
+      "SELECT x.*,d.student_id,d.reason debt_reason,(SELECT g.name FROM memberships mm JOIN groups g ON g.id=mm.group_id WHERE mm.user_id=d.student_id ORDER BY mm.starts_on DESC LIMIT 1) group_name,u.name student,r.starts_at,r.offering_id,r.kind,r.status,r.room,r.change_reason,r.previous_starts_at,c.title course FROM retake_registrations x JOIN debts d ON d.id=x.debt_id JOIN users u ON u.id=d.student_id JOIN retakes r ON r.id=x.retake_id JOIN offerings o ON o.id=r.offering_id JOIN courses c ON c.id=o.course_id WHERE d.student_id=$1 OR (o.teacher_id=$1 AND $2='teacher') OR $2='coordinator' ORDER BY r.starts_at",
       [u.id, u.role],
     );
+  if(method==='POST'&&(m=match(/^\/api\/retakes\/(\d+)\/results$/))){
+    const b=await json(req),selected=[...new Set((Array.isArray(b.debt_ids)?b.debt_ids:[]).map(id))].sort((a,b)=>a-b),group=text(b.group_name,100);
+    if(!selected.length||selected.length>1000)throw error(400,'Отметьте сдавших студентов');
+    return transaction(async c=>{
+      const r=(await rows('SELECT * FROM retakes WHERE id=$1 FOR UPDATE',[id(m[1])],c))[0];if(!r)throw error(404,'Встреча не найдена');await offering(u,r.offering_id,c);if(r.status==='cancelled')throw error(409,'Встреча отменена');
+      const records=await rows("SELECT x.*,d.student_id,(SELECT g.name FROM memberships mm JOIN groups g ON g.id=mm.group_id WHERE mm.user_id=d.student_id ORDER BY mm.starts_on DESC LIMIT 1) group_name FROM retake_registrations x JOIN debts d ON d.id=x.debt_id WHERE x.retake_id=$1 AND x.debt_id=ANY($2::int[]) ORDER BY d.id FOR UPDATE OF x,d",[r.id,selected],c);
+      if(records.length!==selected.length||records.some(x=>x.group_name!==group))throw error(400,'Выберите студентов этой группы, назначенных на эту дату');
+      if(records.some(x=>x.result&&x.result!=='passed'))throw error(409,'Результат уже внесён');
+      for(const x of records){if(x.result==='passed')continue;
+        await c.query("UPDATE retake_registrations SET result='passed' WHERE retake_id=$1 AND debt_id=$2",[r.id,x.debt_id]);
+        await c.query('UPDATE debts SET closed=true WHERE id=$1',[x.debt_id]);
+        await c.query("INSERT INTO debt_events(debt_id,actor_id,event,note) VALUES($1,$2,'passed',$3)",[x.debt_id,u.id,'Закрыто преподавателем: '+(r.kind==='retake'?'пересдача':'сдача долгов')+' '+r.id]);
+        await c.query("INSERT INTO notifications(recipient_id,event_key,title,message,target_page,target_id) VALUES($1,$2,'Задолженность закрыта',$3,'debts',$4) ON CONFLICT DO NOTHING",[x.student_id,`retake-result:${r.id}:${x.debt_id}`,'Преподаватель отметил успешную сдачу',r.id]);
+      }
+      await c.query("INSERT INTO audit_events(actor_id,object_type,object_id,action,detail) VALUES($1,'retake',$2,'results',$3)",[u.id,r.id,JSON.stringify({group,debt_ids:selected,result:'passed'})]);return {ok:true};
+    });
+  }
   if (method === "POST" && (m = match(/^\/api\/retakes\/(\d+)\/result$/))) {
     const b = await json(req);
     if (!["passed", "failed"].includes(b.result))
       throw error(400, "Неизвестный результат");
     return transaction(async (c) => {
       const r = (
-        await rows("SELECT * FROM retakes WHERE id=$1", [id(m[1])], c)
+        await rows("SELECT * FROM retakes WHERE id=$1 FOR UPDATE", [id(m[1])], c)
       )[0];
       if (!r) throw error(404, "Пересдача не найдена");
       await offering(u, r.offering_id, c);
+      if(r.status==='cancelled')throw error(409,"Встреча отменена");
       const x = (
         await rows(
           "SELECT * FROM retake_registrations WHERE retake_id=$1 AND debt_id=$2 FOR UPDATE",
@@ -638,32 +689,14 @@ export async function features(req, res, u) {
       return x;
     });
   }
-  if (method === "POST" && p === "/api/contacts") {
-    admin(u);
-    const b = await json(req);
-    return (
-      await rows(
-        "INSERT INTO contacts(name,position,email) VALUES($1,$2,$3) RETURNING *",
-        [text(b.name, 150), text(b.position, 200), text(b.email, 200)],
-      )
-    )[0];
-  }
-  if (method === "PATCH" && (m = match(/^\/api\/contacts\/(\d+)$/))) {
-    admin(u);
-    const b = await json(req);
-    return (
-      (
-        await rows(
-          "UPDATE contacts SET name=$1,position=$2,email=$3,verified_at=CURRENT_DATE WHERE id=$4 RETURNING *",
-          [
-            text(b.name, 150),
-            text(b.position, 200),
-            text(b.email, 200),
-            id(m[1]),
-          ],
-        )
-      )[0] || { ok: false }
-    );
+  if((method==='POST'&&p==='/api/contacts')||(method==='PATCH'&&(m=match(/^\/api\/contacts\/(\d+)$/)))){
+    admin(u);const b=await json(req),telegram=String(b.telegram||'').trim().replace(/^@/,''),email=String(b.email||'').trim();
+    if(telegram&&!/^[a-zA-Z0-9_]{5,32}$/.test(telegram))throw error(400,'Проверьте Telegram: нужен ник без ссылки');
+    if(email&&(email.length>200||!/^\S+@\S+\.\S+$/.test(email)))throw error(400,'Проверьте почту');
+    if(!email&&!telegram)throw error(400,'Укажите почту или Telegram');
+    const values=[text(b.name,150),text(b.position,200),email,telegram];
+    if(method==='POST')return (await rows('INSERT INTO contacts(name,position,email,telegram) VALUES($1,$2,$3,$4) RETURNING *',values))[0];
+    const updated=(await rows('UPDATE contacts SET name=$1,position=$2,email=$3,telegram=$4,verified_at=CURRENT_DATE WHERE id=$5 RETURNING *',[...values,id(m[1])]))[0];if(!updated)throw error(404,'Контакт не найден');return updated;
   }
   if (
     method === "POST" &&
@@ -756,8 +789,8 @@ export async function features(req, res, u) {
           u.role !== "headman" ||
           !(
             await rows(
-              "SELECT 1 FROM headman_assignments WHERE user_id=$1 AND group_id=$2 AND starts_on<=$3 AND (ends_on IS NULL OR ends_on>=$4)",
-              [u.id, o.group_id, from, to],
+              "SELECT 1 FROM headman_assignments WHERE user_id=$1 AND offering_has_group($2,group_id) AND starts_on<=$3 AND (ends_on IS NULL OR ends_on>=$4)",
+              [u.id, o.id, from, to],
               c,
             )
           ).length
@@ -772,7 +805,7 @@ export async function features(req, res, u) {
       if (sessions.length > 366) throw error(400, "Сократите период выгрузки");
       const matrix = new Map();
       for (const s of sessions)
-        for (const student of await roster({ ...s, group_id: o.group_id }, c)) {
+        for (const student of await roster({ ...s, group_id: o.group_id }, c,u)) {
           if (!matrix.has(student.id))
             matrix.set(student.id, { ...student, marks: new Map() });
           matrix.get(student.id).marks.set(s.id, "—");
@@ -883,7 +916,7 @@ export async function features(req, res, u) {
   if (method === "GET" && (m = match(/^\/api\/materials\/(\d+)\/history$/))) {
     const a = (
       await rows(
-        "SELECT m.id FROM materials m JOIN offerings o ON o.id=m.offering_id WHERE m.id=$1 AND ($3='coordinator' OR o.teacher_id=$2 OR EXISTS(SELECT 1 FROM memberships x WHERE x.group_id=o.group_id AND x.user_id=$2 AND x.starts_on<=CURRENT_DATE AND (x.ends_on IS NULL OR x.ends_on>=CURRENT_DATE)))",
+        "SELECT m.id FROM materials m JOIN offerings o ON o.id=m.offering_id WHERE m.id=$1 AND ($3='coordinator' OR o.teacher_id=$2 OR EXISTS(SELECT 1 FROM memberships x WHERE offering_has_group(o.id,x.group_id) AND x.user_id=$2 AND x.starts_on<=CURRENT_DATE AND (x.ends_on IS NULL OR x.ends_on>=CURRENT_DATE)))",
         [id(m[1]), u.id, u.role],
       )
     )[0];

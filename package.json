@@ -11,10 +11,13 @@
     "migrate": "node server/migrate.js",
     "seed": "node server/seed.js",
     "test:integration": "RUN_INTEGRATION=1 node --test test/integration.test.js",
+    "test:mvp": "RUN_MVP_INTEGRATION=1 node --test test/mvp.integration.test.js",
+    "import:materials": "node scripts/import-course-materials.js",
     "dev:api": "node --watch server/index.js"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
+    "pdfjs-dist": "6.5.438",
     "pg": "^8.13.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

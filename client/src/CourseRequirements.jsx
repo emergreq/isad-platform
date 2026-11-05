@@ -1,0 +1,7 @@
+import React,{useState} from 'react';
+export const assessmentNames={exam:'Экзамен',credit:'Зачёт',graded_credit:'Зачёт с оценкой'};
+export default function CourseRequirements({offering,onClose,onSaved,api}){
+ const [busy,setBusy]=useState(false),[error,setError]=useState('');
+ async function save(e){e.preventDefault();setBusy(true);setError('');try{const b=Object.fromEntries(new FormData(e.currentTarget));await api(`offerings/${offering.id}/requirements`,{method:'PATCH',body:JSON.stringify(b)});await onSaved();onClose();}catch(e){setError(e.message);}finally{setBusy(false);}}
+ return <section className="form-panel"><div className="section-head"><h3>{offering.title} · {offering.group_name}</h3><button className="link" onClick={onClose}>Закрыть</button></div>{error&&<p className="error" role="alert">{error}</p>}<form onSubmit={save}><div className="form-grid"><label>Форма контроля<select name="assessment_type" defaultValue={offering.assessment_type||''}><option value="">Не указана</option>{Object.entries(assessmentNames).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label><label>Условия закрытия предмета<textarea name="completion_conditions" maxLength={6000} defaultValue={offering.completion_conditions} placeholder="Работы, баллы, допуск и другие требования"/></label></div><button className="primary" disabled={busy}>{busy?'Сохраняем…':'Сохранить'}</button></form></section>;
+}

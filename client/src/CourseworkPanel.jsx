@@ -1,0 +1,18 @@
+import React,{useState} from 'react';
+const deadline=x=>new Date(x.event_date+'T12:00:00+03:00').toLocaleDateString('ru-RU',{timeZone:'Europe/Moscow',day:'numeric',month:'long',year:'numeric'})+(x.starts_at?' · '+new Date(x.starts_at).toLocaleTimeString('ru-RU',{timeZone:'Europe/Moscow',hour:'2-digit',minute:'2-digit'})+' МСК':'');
+export default function CourseworkPanel({items=[],offerings=[],staff,api,onChanged}){
+ const [adding,setAdding]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ async function save(e){e.preventDefault();setBusy(true);setError('');try{
+  const f=new FormData(e.currentTarget),file=f.get('file');
+  const params=new URLSearchParams({offering_id:f.get('offering_id'),filename:file.name,title:(f.get('title')+' — требования').slice(0,220),kind:'reference',topic:'Курсовая работа',draft:'coursework'});
+  const response=await fetch('/api/library/upload?'+params,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});const uploaded=await response.json();if(!response.ok)throw Error(uploaded.error);
+  await api('coursework',{method:'POST',body:JSON.stringify({offering_id:f.get('offering_id'),title:f.get('title'),description:f.get('description'),requirements_file_id:uploaded.id,event_date:f.get('event_date'),starts_at:f.get('time')?`${f.get('event_date')}T${f.get('time')}:00+03:00`:null})});
+  await onChanged();setAdding(false);
+ }catch(e){setError(e.message);}finally{setBusy(false);}}
+ async function toggle(item){setBusy(true);setError('');try{await api(`calendar-events/${item.id}/progress`,{method:'POST',body:JSON.stringify({done:!item.done})});await onChanged();}catch(e){setError(e.message);}finally{setBusy(false);}}
+ if(!staff&&!items.length)return null;
+ return <section className="coursework-panel"><div className="section-head"><h2>Курсовые работы</h2>{staff&&<button className="primary" onClick={()=>setAdding(!adding)}>+ Курсовая работа</button>}</div>{error&&<p className="error" role="alert">{error}</p>}
+  {adding&&<form className="form-panel" onSubmit={save}><div className="form-grid"><label>Предмет<select name="offering_id" required><option value="">Выберите предмет</option>{offerings.map(o=><option key={o.id} value={o.id}>{o.title} · {(o.group_names||[o.group_name]).join(' + ')}</option>)}</select></label><label>Название<input name="title" required maxLength={250}/></label><label>Описание<textarea name="description" maxLength={6000}/></label><label>Требования (PDF, DOCX, TXT — до 25 МБ)<input name="file" type="file" required accept=".pdf,.docx,.txt,.md"/></label><label>Дата сдачи<input name="event_date" type="date" required/></label><label>Время (МСК, необязательно)<input name="time" type="time"/></label></div><div className="toolbar"><button className="primary" disabled={busy}>{busy?'Публикуем…':'Опубликовать'}</button><button className="link" type="button" onClick={()=>setAdding(false)}>Закрыть</button></div></form>}
+  <div className="cards">{items.map(x=><article className={x.done?'coursework-done':''} key={x.id} id={`coursework-${x.id}`}><div className="meta">{x.course} · {(x.group_names||[x.group_name]).join(' + ')}</div><h3>{x.title}</h3><p className="coursework-deadline">Сдать до {deadline(x)}</p>{x.description&&<p className="multiline">{x.description}</p>}<div className="toolbar">{x.requirements_url&&<a href={x.requirements_url} target="_blank" rel="noreferrer">Требования ↗</a>}<a href={`#calendar/event-${x.id}?date=${x.event_date}`}>В календаре →</a>{!staff&&<button className="link" disabled={busy} onClick={()=>toggle(x)}>{x.done?'Выполнено ✓':'Отметить выполненным'}</button>}</div></article>)}</div>
+ </section>;
+}

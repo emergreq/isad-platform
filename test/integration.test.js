@@ -20,7 +20,7 @@ test(
     const db = new pg.Pool({ connectionString: source.href });
     let child;
     try {
-      for (const file of ["001_initial.sql", "002_workflows.sql"])
+      for (const file of ["001_initial.sql", "002_workflows.sql", "003_mvp.sql", "004_schedule_source.sql", "005_profile_group.sql", "006_contest_link.sql", "007_project_interests.sql", "008_course_requirements.sql", "009_session_reschedule.sql", "010_joint_groups.sql", "011_coursework.sql", "012_retake_days.sql", "013_lesson_materials.sql", "014_contacts_telegram.sql", "015_retake_assignments.sql"])
         await db.query(
           await readFile(new URL("../db/" + file, import.meta.url), "utf8"),
         );
@@ -93,7 +93,7 @@ test(
           body: data === undefined ? undefined : JSON.stringify(data),
         });
         const result = await response.json();
-        return { status: response.status, ...result, data: result };
+        return { ...result, status: response.status, data: result };
       };
       let session, homework, debt, retake, project, position;
       await t.test(
@@ -307,7 +307,7 @@ test(
             offering_id: 1,
             starts_at: "2099-01-01T10:00:00Z",
             room: "A",
-            capacity: 1,
+            capacity: 1,kind:"debt_day",debt_ids:[debt,d2.id],
           });
           assert.equal(r.status, 200);
           retake = r.id;
@@ -434,7 +434,7 @@ test(
       await t.test(
         "unpublished schedule is invisible and publication is idempotent",
         async () => {
-          const entries = [{ title: "Sample" }];
+          const entries = [{ title: "Sample", group: "A" }];
           await db.query(
             "INSERT INTO schedule_imports(checksum,entries,source_url,created_by) VALUES($1,$2,$3,4)",
             ["testhash", JSON.stringify(entries), "https://example.org"],

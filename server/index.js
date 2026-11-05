@@ -1,3 +1,5 @@
+import {notifyProjectMatches} from './project-interests.js';
+import { mvp } from "./mvp.js";
 import { features, NO_ROUTE } from "./features.js";
 import http from "node:http";
 import { pool, transaction } from "./db.js";
@@ -83,13 +85,15 @@ async function main(req, res) {
     return { ok: true };
   }
   if (req.method === "GET" && p === "/api/me") return u;
+  const extension = await mvp(req, res, u);
+  if (extension !== undefined) return extension;
   const feature = await features(req, res, u);
   if (feature !== NO_ROUTE) return feature;
-  const access = `(o.teacher_id=$1 OR $2='coordinator' OR EXISTS (SELECT 1 FROM memberships m WHERE m.user_id=$1 AND m.group_id=o.group_id AND m.starts_on<=CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on>=CURRENT_DATE)))`;
+  const access = `(o.teacher_id=$1 OR $2='coordinator' OR EXISTS (SELECT 1 FROM memberships m WHERE m.user_id=$1 AND offering_has_group(o.id,m.group_id) AND m.starts_on<=CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on>=CURRENT_DATE)))`;
   if (req.method === "GET" && p === "/api/sessions")
     return (
       await pool.query(
-        `SELECT s.*,c.title course,g.name group_name,o.semester FROM sessions s JOIN offerings o ON o.id=s.offering_id JOIN courses c ON c.id=o.course_id JOIN groups g ON g.id=o.group_id WHERE ${access} ORDER BY s.starts_at`,
+        `SELECT s.*,c.title course,g.name group_name,offering_group_names(o.id) group_names,o.semester FROM sessions s JOIN offerings o ON o.id=s.offering_id JOIN courses c ON c.id=o.course_id JOIN groups g ON g.id=o.group_id WHERE ${access} ORDER BY s.starts_at`,
         [u.id, u.role],
       )
     ).rows;
@@ -116,7 +120,7 @@ async function main(req, res) {
   if (req.method === "GET" && p === "/api/materials")
     return (
       await pool.query(
-        `SELECT m.*,c.title course FROM materials m JOIN offerings o ON o.id=m.offering_id JOIN courses c ON c.id=o.course_id WHERE ${access} ORDER BY m.title`,
+        `SELECT m.*,c.title course FROM materials m JOIN offerings o ON o.id=m.offering_id JOIN courses c ON c.id=o.course_id WHERE ${access} AND m.published ORDER BY m.title`,
         [u.id, u.role],
       )
     ).rows;
@@ -132,7 +136,7 @@ async function main(req, res) {
   if (req.method === "GET" && p === "/api/attendance")
     return (
       await pool.query(
-        `SELECT a.status,a.updated_at,s.title,c.title course FROM attendance a JOIN sessions s ON s.id=a.session_id JOIN offerings o ON o.id=s.offering_id JOIN courses c ON c.id=o.course_id WHERE a.student_id=$1 ORDER BY s.starts_at DESC`,
+        `SELECT a.status,a.updated_at,s.title,s.starts_at,c.title course FROM attendance a JOIN sessions s ON s.id=a.session_id JOIN offerings o ON o.id=s.offering_id JOIN courses c ON c.id=o.course_id WHERE a.student_id=$1 ORDER BY s.starts_at DESC`,
         [u.id],
       )
     ).rows;
@@ -158,28 +162,19 @@ async function main(req, res) {
     return { ok: true };
   }
   if (req.method === "POST" && p === "/api/projects") {
-    const b = await body(req);
-    const r = await pool.query(
-      "INSERT INTO projects(owner_id,title,description) VALUES($1,$2,$3) RETURNING *",
-      [u.id, required(b.title), required(b.description)],
-    );
-    return r.rows[0];
+    const b=await body(req);
+    return transaction(async c=>{
+      const project=(await c.query('INSERT INTO projects(owner_id,title,description) VALUES($1,$2,$3) RETURNING *',[u.id,required(b.title),required(b.description)])).rows[0];
+      await notifyProjectMatches(c,project.id);return project;
+    });
   }
   if (req.method === "POST" && /^\/api\/projects\/\d+\/roles$/.test(p)) {
-    const id = number(p.split("/")[3]);
-    const b = await body(req);
-    const r = await pool.query(
-      "INSERT INTO project_roles(project_id,title,skills,capacity) SELECT id,$1,$2,$3 FROM projects WHERE id=$4 AND owner_id=$5 RETURNING *",
-      [
-        required(b.title),
-        String(b.skills || "").slice(0, 500),
-        number(b.capacity),
-        id,
-        u.id,
-      ],
-    );
-    if (!r.rowCount) throw fail(404, "Проект не найден");
-    return r.rows[0];
+    const projectId=number(p.split('/')[3]),b=await body(req);
+    return transaction(async c=>{
+      const role=(await c.query('INSERT INTO project_roles(project_id,title,skills,capacity) SELECT id,$1,$2,$3 FROM projects WHERE id=$4 AND owner_id=$5 RETURNING *',[required(b.title),String(b.skills||'').slice(0,500),number(b.capacity),projectId,u.id])).rows[0];
+      if(!role)throw fail(404,'Проект не найден');
+      await notifyProjectMatches(c,projectId);return role;
+    });
   }
   if (req.method === "GET" && p === "/api/applications")
     return (

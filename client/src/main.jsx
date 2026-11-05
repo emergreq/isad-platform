@@ -1,15 +1,30 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
+import MvpPages from "./MvpPages.jsx";
+import TodaySchedule from "./TodaySchedule.jsx";
+import Schedule from "./StudySchedule.jsx";
+import ProjectInterests from "./ProjectInterests.jsx";
+import {StudentDebts} from "./RetakeDays.jsx";
+import DebtManager from "./DebtManager.jsx";
+import CourseworkPanel from "./CourseworkPanel.jsx";
+import Journal from "./AttendanceJournal.jsx";
+import CourseRequirements,{assessmentNames} from "./CourseRequirements.jsx";
+import {currentRoute,useDeepFocus} from "./navigation.js";
 const menu = [
   ["home", "Главная", "◫"],
+  ["calendar", "Календарь", "▦"],
   ["sessions", "Расписание", "▦"],
   ["homework", "Задания", "✓"],
   ["attendance", "Посещаемость", "◷"],
   ["materials", "Материалы", "▤"],
   ["projects", "Проекты", "◇"],
-  ["debts", "Пересдачи", "↗"],
+  ["debts", "Долги и пересдачи", "↗"],
   ["contacts", "Контакты", "◉"],
+  ["assistant", "Помощник", "✧"],
+  ["hackathons", "Хакатоны и зачёты", "◇"],
+  ["notifications", "Уведомления", "◉"],
+  ["profile", "Мой профиль", "◉"],
 ];
 const roleNames = {
   student: "Студент",
@@ -141,20 +156,84 @@ const field = (name, label, type = "text", value) => ({
   type,
   value,
 });
+function Icon({ name, size = 20, ...props }) {
+  const paths = {
+    home: "M3 10 12 3l9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z",
+    sessions: "M8 2v4m8-4v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a2 2 0 0 1 2-2Zm2 10h3m4 0h3m-10 4h3",
+    homework: "m8 12 3 3 5-6M9 3h6l1 3H8l1-3ZM8 4H5v17h14V4h-3",
+    attendance: "M12 8v4l3 2M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z",
+    materials: "M4 4h6l2 2h8v14H4V4Zm4 6h8m-8 4h6",
+    projects: "M8 7V4h8v3M3 7h18v13H3V7Zm0 6h18m-11 0v3h4v-3",
+    debts: "M5 7h12l-4-4m4 4-4 4M19 17H7l4 4m-4-4 4-4",
+    contacts: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m13-17a4 4 0 0 1 0 8m7 9v-2a4 4 0 0 0-3-3M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z",
+    search: "m16 16 5 5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z",
+    arrow: "M5 12h14m-6-6 6 6-6 6",
+    refresh: "M20 7v5h-5m5 0a8 8 0 1 0-2 6",
+    logout: "M9 3H4v18h5m-1-9h13m-5-5 5 5-5 5",
+    sparkle: "m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z",
+    admin: "M12 8v8m-4-4h8M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
+  };
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}><path d={paths[name] || paths[({calendar:"sessions",assistant:"sparkle",notifications:"homework",profile:"contacts",hackathons:"projects"})[name]] || paths.materials} /></svg>;
+}
+function Brand() {
+  return <div className="brand"><span className="brand-symbol misis-logo" role="img" aria-label="Логотип Университета МИСИС"><img src="/misis-logo.png" alt="" /></span><div>isad<span className="brand-hub">hub</span><small>твоё учебное пространство</small></div></div>;
+}
+function StudyArt({ id = "study" }) {
+  return <svg className="study-art" viewBox="0 0 330 280" fill="none" aria-hidden="true">
+    <defs>
+      <linearGradient id={`${id}-ring`} x1="40" y1="40" x2="240" y2="240" gradientUnits="userSpaceOnUse"><stop stopColor="#A4F8FF"/><stop offset=".45" stopColor="#24C9FB"/><stop offset="1" stopColor="#2855FF"/></linearGradient>
+      <linearGradient id={`${id}-book`} x1="110" y1="60" x2="270" y2="230" gradientUnits="userSpaceOnUse"><stop stopColor="#fff"/><stop offset="1" stopColor="#C9E4FF"/></linearGradient>
+      <linearGradient id={`${id}-petal`} x1="210" y1="20" x2="250" y2="110" gradientUnits="userSpaceOnUse"><stop stopColor="#DFFBFF"/><stop offset="1" stopColor="#24C9FB"/></linearGradient>
+      <radialGradient id={`${id}-ball`} cx=".35" cy=".25" r=".8"><stop stopColor="#E8FFFF"/><stop offset=".45" stopColor="#34D6ED"/><stop offset="1" stopColor="#057CE5"/></radialGradient>
+      <filter id={`${id}-shadow`} x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="15" stdDeviation="10" floodColor="#001C87" floodOpacity=".2"/></filter>
+    </defs>
+    <ellipse cx="168" cy="244" rx="102" ry="12" fill="#001C87" opacity=".1"/>
+    <g filter={`url(#${id}-shadow)`}><ellipse cx="115" cy="145" rx="81" ry="91" transform="rotate(-29 115 145)" stroke={`url(#${id}-ring)`} strokeWidth="29"/>
+    <g transform="rotate(13 205 156)"><rect x="135" y="88" width="120" height="144" rx="14" fill="#123AAE"/><rect x="141" y="83" width="119" height="143" rx="13" fill={`url(#${id}-book)`}/><path d="M159 92v123" stroke="#67ADF7" strokeWidth="2"/><path d="M177 117h59m-59 12h43m-43 54h57m-57 10h37" stroke="#3072C9" strokeWidth="4" strokeLinecap="round"/><path d="m197 146 6 13 14 2-10 10 2 14-12-7-13 7 3-14-11-10 15-2 6-13Z" fill="#1756CE"/></g></g>
+    <g transform="translate(255 65)"><circle r="28" stroke="#7BEAFF" strokeWidth="11"/><path d="M0-28a28 28 0 0 1 28 28" stroke="#1764FA" strokeWidth="11"/><circle r="13" stroke="#E5FCFF" strokeWidth="5"/><circle r="4" fill="#7BEAFF"/></g>
+    <circle cx="84" cy="63" r="15" fill={`url(#${id}-ball)`}/><circle cx="278" cy="223" r="21" fill={`url(#${id}-ball)`}/><path d="m43 189 3 8 8 3-8 3-3 8-3-8-8-3 8-3 3-8Z" fill="#D5FAFF"/>
+  </svg>;
+}
 function App() {
   const [me, setMe] = useState(null),
     [checking, setChecking] = useState(true),
-    [page, setPage] = useState("home"),
+    [page, setPage] = useState(currentRoute().page),
     [data, setData] = useState({}),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false),
-    [editor, setEditor] = useState(null);
+    [editor, setEditor] = useState(null),
+    [query, setQuery] = useState(""),
+    [materialCourse, setMaterialCourse] = useState("");
+  const [requirements,setRequirements]=useState(null);
+  const searchRef = useRef(null);
+  const [routeKey,setRouteKey]=useState(location.hash);
+  useDeepFocus(data.projects,routeKey);
+  const scheduleWeek=useRef(null);scheduleWeek.current=data.schedule?.week_from;
+  const latestNotification=useRef('');latestNotification.current=String(data.notifications?.[0]?.id||'');
+  useEffect(()=>{
+    if(!me)return;let stopped=false;
+    const refresh=async()=>{if(document.hidden)return;try{const previousLatest=latestNotification.current;const notifications=await api('notifications');if(!stopped)setData(d=>({...d,notifications}));const day=new Date(Date.now()+3*3600000);const monday=new Date(Date.UTC(day.getUTCFullYear(),day.getUTCMonth(),day.getUTCDate()-((day.getUTCDay()||7)-1))).toISOString().slice(0,10);if((scheduleWeek.current&&scheduleWeek.current!==monday)||String(notifications[0]?.id||'')!==previousLatest){const [schedule,coursework,debts,retakes,registrations]=await Promise.all([api('schedule'),api('coursework'),api('debts'),api('retakes'),api('registrations')]);if(!stopped)setData(d=>({...d,schedule,coursework,debts,retakes,registrations}));}}catch{}};
+    const timer=setInterval(refresh,30000);window.addEventListener('focus',refresh);
+    return()=>{stopped=true;clearInterval(timer);window.removeEventListener('focus',refresh);};
+  },[me?.id]);
+  useEffect(()=>{const changed=()=>{const route=currentRoute();setPage(menu.some(x=>x[0]===route.page)?route.page:'home');setRouteKey(location.hash);setRequirements(null);setEditor(null);setQuery('');if(route.page==='home')api('offerings').then(offerings=>setData(d=>({...d,offerings}))).catch(()=>{});if(route.page==='projects')api('projects').then(projects=>setData(d=>({...d,projects}))).catch(()=>{});if(route.page==='sessions')api('schedule').then(schedule=>setData(d=>({...d,schedule}))).catch(()=>{});};window.addEventListener('hashchange',changed);return()=>window.removeEventListener('hashchange',changed);},[]);
+  useEffect(() => {
+    const handleKey = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        if (searchRef.current) { event.preventDefault(); searchRef.current.focus(); }
+      }
+      if (event.key === "Escape") setQuery("");
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
   const load = async () => {
     setLoading(true);
     try {
       const keys = [
         "sessions",
         "homework",
+        "coursework",
         "attendance",
         "debts",
         "materials",
@@ -165,6 +244,8 @@ function App() {
         "retakes",
         "registrations",
         "schedule",
+        "notifications",
+        "study-overview",
       ];
       if (me?.role === "coordinator") keys.push("directory");
       setData(
@@ -210,14 +291,30 @@ function App() {
     offeringOptions = offerings.map((o) =>
       option(o.id, `${o.title} · ${o.group_name}`),
     );
+  const navigate = (id) => {
+    location.hash=id; setPage(id); setRequirements(null); setEditor(null); setError(""); setQuery(""); setMaterialCourse("");
+  };
+  const courses = [...new Map((data.offerings || []).map(x => [x.title, x])).values()];
+  const railDeadlines = data["study-overview"]?.deadlines || [];
+  const pending = (data.homework || []).filter(x => !x.done).sort((a, b) => new Date(a.due_at) - new Date(b.due_at));
+  const searchRows = query.trim() ? [
+    ...menu.map(([id, title]) => ({ id: `page-${id}`, title, kind: "Раздел", page: id })),
+    ...(data.materials || []).map(x => ({ id: `material-${x.id}`, title: x.title, detail: x.course, kind: "Материал", page: "materials", course: x.course })),
+    ...(data.homework || []).map(x => ({ id: `homework-${x.id}`, title: x.title, detail: x.course, kind: "Задание", page: "homework" })),
+    ...courses.map(x => ({ id: `course-${x.id}`, title: x.title, kind: "Предмет", page: "materials", course: x.title })),
+  ].filter(x => `${x.title} ${x.detail || ""}`.toLocaleLowerCase("ru").includes(query.trim().toLocaleLowerCase("ru"))).slice(0, 8) : [];
   if (checking) return <div className="empty">Загружаем кабинет…</div>;
   if (!me)
     return (
       <main className="login">
+        <section className="login-story">
+          <Brand />
+          <div className="login-story-copy"><h2>Учиться.<br/>Создавать.<br/><em>Быть собой.</em></h2><p>Твои предметы, люди и возможности.<br/>Собрали всё в одном пространстве.</p></div>
+          <StudyArt id="login" />
+          <span className="login-story-note">a little space for big ideas ✧</span>
+        </section>
         <div className="login-card">
-          <div className="brand">
-            <span>И</span> ISAD HUB
-          </div>
+          <div className="login-mobile-brand"><Brand /></div>
           <p className="eyebrow">ПОРТАЛ КАФЕДРЫ</p>
           <h1>
             Всё для учёбы
@@ -244,36 +341,30 @@ function App() {
     page === "admin" ? "Управление" : menu.find((x) => x[0] === page)?.[1];
   return (
     <div className="layout">
-      <aside>
-        <div className="brand">
-          <span>И</span> ISAD HUB
-        </div>
+      <a className="skip-link" href="#main-content">Перейти к содержимому</a>
+      <aside className="sidebar">
+        <Brand />
         <div className="aside-label">РАБОЧЕЕ ПРОСТРАНСТВО</div>
-        <nav>
+        <nav aria-label="Разделы портала">
           {[
             ...menu,
             ...(coordinator ? [["admin", "Управление", "⚙"]] : []),
-          ].map(([id, name, icon]) => (
+          ].map(([id, name]) => (
             <button
               key={id}
-              onClick={() => {
-                setPage(id);
-                setEditor(null);
-                setError("");
-              }}
+              onClick={() => navigate(id)}
+              aria-current={page === id ? "page" : undefined}
               className={page === id ? "active" : ""}
             >
-              <i>{icon}</i>
-              {name}
+              <Icon name={id} />
+              <span>{name}</span>
+              {id === "homework" && pending.length > 0 && <span className="nav-count">{pending.length}</span>}{id === "notifications" && data.notifications?.some(x => !x.read_at) && <span className="nav-count">{data.notifications.filter(x => !x.read_at).length}</span>}
             </button>
           ))}
         </nav>
+
         <div className="aside-bottom">
-          <div className="avatar">{me.name[0]}</div>
-          <div>
-            <strong>{me.name}</strong>
-            <small>{roleNames[me.role]}</small>
-          </div>
+          <button className="profile-shortcut" onClick={()=>navigate('profile')} aria-label="Открыть мой профиль"><span className="avatar">{me.name[0]}</span><span className="profile-shortcut-name"><strong>{me.name}</strong><small>{roleNames[me.role]}</small></span></button>
           <button
             title="Выйти"
             onClick={async () => {
@@ -287,31 +378,37 @@ function App() {
               }
             }}
           >
-            ↪
+            <Icon name="logout" size={18} />
           </button>
         </div>
       </aside>
-      <main className="main">
+      <main className="main" id="main-content">
+        <div className="topbar">
+          <div className="search-wrap">
+            <div className="search-field"><Icon name="search" size={18} /><input ref={searchRef} aria-label="Поиск по разделам, предметам, материалам и заданиям" placeholder="Найти предмет, материал или задание" value={query} onChange={e => setQuery(e.target.value)} aria-controls={query.trim() ? "search-results" : undefined} /><kbd>Ctrl K</kbd></div>
+            {query.trim() && <div className="search-results" id="search-results"><div className="search-caption" role="status">{searchRows.length ? "Найдено в твоём пространстве" : "Ничего не нашлось. Попробуй другое слово."}</div>{searchRows.map(x => <button key={x.id} onClick={() => { navigate(x.page); if (x.course) setMaterialCourse(x.course); }}><Icon name={x.page}/><span><strong>{x.title}</strong><small>{x.kind}{x.detail ? ` · ${x.detail}` : ""}</small></span><Icon name="arrow" size={16}/></button>)}</div>}
+          </div>
+          <span className="today-label">{new Date().toLocaleDateString("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "long", weekday: "short" })}</span>
+        </div>
         <header>
           <div>
-            <span className="crumb">ИСАД / {title}</span>
+
             <h1>
               {page === "home"
-                ? `Здравствуйте, ${me.name.split(" ")[0]}`
+                ? `Привет, ${me.name.split(" ")[0]}`
                 : title}
               <span className="dot">.</span>
             </h1>
-            <p>Всё важное для учёбы и проектов — здесь.</p>
+
           </div>
-          <button className="badge" disabled={loading} onClick={load}>
-            {loading ? "Обновляем…" : "↻ Обновить данные"}
-          </button>
+
         </header>
         {error && (
           <div className="error alert" role="alert">
             {error}
           </div>
         )}
+        {requirements&&<CourseRequirements offering={requirements} api={api} onClose={()=>setRequirements(null)} onSaved={load}/>}
         {editor && (
           <Form
             key={editor.title}
@@ -319,50 +416,35 @@ function App() {
             onClose={() => setEditor(null)}
           />
         )}
+        <MvpPages courseworks={data.coursework||[]} key={routeKey} page={page} me={me} offerings={data.offerings || []} onChanged={load} onGroupChanged={async()=>{setMaterialCourse("");setQuery("");const fresh=await api("me");if(fresh.name!==me.name)setMe(fresh);else await load();}} materialCourse={materialCourse}/>
         {page === "home" && (
           <>
+            <TodaySchedule source={data.schedule} me={me} offerings={offerings}/>
             <div className="hero">
               <div>
-                <span className="eyebrow">ВАШЕ УЧЕБНОЕ ПРОСТРАНСТВО</span>
-                <h2>
-                  Хороший день,
-                  <br />
-                  чтобы узнать что-то новое.
-                </h2>
-                <p>Следите за занятиями и находите команду для своих идей.</p>
-                <button onClick={() => setPage("sessions")}>
-                  Открыть расписание ↗
-                </button>
+                <span className="hero-label"><Icon name="sparkle" size={14}/> УЧЁБА В ТВОЁМ РИТМЕ</span>
+                <h2>Меньше хаоса.<br/><em>Больше открытий.</em></h2>
+                <p>Всё, что нужно для нового шага,<br/>уже в твоём пространстве.</p>
+                <button onClick={() => navigate("sessions")}>Моё расписание <Icon name="arrow" size={17}/></button>
               </div>
-              <div className="hero-art">✳</div>
+              <StudyArt id="hero" />
             </div>
-            <div className="stats">
-              <div>
-                <small>БЛИЖАЙШИЕ ЗАНЯТИЯ</small>
-                <strong>
-                  {
-                    (data.sessions || []).filter(
-                      (x) =>
-                        !x.cancelled && new Date(x.starts_at) >= new Date(),
-                    ).length
-                  }
-                </strong>
-                <span>в вашем учебном плане</span>
-              </div>
-              <div>
-                <small>ДОМАШНИЕ ЗАДАНИЯ</small>
-                <strong>
-                  {data.homework?.filter((x) => !x.done).length || 0}
-                </strong>
-                <span>ещё не отмечено</span>
-              </div>
-              <div>
-                <small>ПРОЕКТЫ</small>
-                <strong>{data.projects?.length || 0}</strong>
-                <span>в каталоге</span>
-              </div>
+            {(data["study-overview"]?.deadlines || []).length > 0 && <section className="overview-box" style={{marginTop:18}}><div className="section-head"><h3>Ближайшие контрольные и сроки</h3><button className="link" onClick={() => navigate("calendar")}>Календарь →</button></div>{data["study-overview"].deadlines.slice(0,4).map(x => <div className="overview-item" key={x.key}><div><b>{x.title}</b><p>{x.course} · {x.date}{x.all_day ? " · время не указано" : ""}</p>{x.topics && <p>Темы: {x.topics}</p>}</div>{x.url && <a href={x.url} target="_blank" rel="noreferrer">Контест ↗</a>}</div>)}</section>}
+            <div className="section-head"><div><h2>Мои предметы</h2></div><button className="link" onClick={() => navigate("materials")}>Все материалы <Icon name="arrow" size={15}/></button></div>
+            <div className="course-grid">
+              {courses.length ? courses.map((course, i) => {
+                const materials = (data.materials || []).filter(x => x.course === course.title);
+                const tasks = (data.homework || []).filter(x => x.course === course.title && !x.done);
+                return <article className={`course-card course-tone-${i % 3}`} key={course.id} id={`course-${course.id}`}>
+                  <div className="course-top"><span className="course-monogram">{course.title.split(" ").slice(0, 2).map(x => x[0]).join("").toLocaleUpperCase("ru")}</span><span className="course-group">{(course.group_names||[course.group_name]).join(' + ')}</span></div>
+                  <h3>{course.title}</h3><p>{course.semester}</p>{course.assessment_type&&<span className="tag">{assessmentNames[course.assessment_type]}</span>}{course.completion_conditions&&<details className="course-conditions"><summary>Условия закрытия</summary><p className="multiline">{course.completion_conditions}</p></details>}{staff&&(coordinator||course.teacher_id===me.id)&&<button className="link" onClick={()=>setRequirements(course)}>Форма контроля и условия</button>}
+                  <div className="course-files">{materials.length ? materials.slice(0, 2).map(x => <a href={x.url} key={x.id} target="_blank" rel="noreferrer"><Icon name="materials" size={15}/><span>{x.title}</span><Icon name="arrow" size={13}/></a>) : <div className="course-no-files">Материалы ещё не добавлены</div>}</div>
+                  <div className="course-bottom"><span/><button aria-label={`Материалы: ${course.title}`} onClick={() => { navigate("materials"); setMaterialCourse(course.title); }}><Icon name="arrow" size={18}/></button></div>
+                </article>;
+              }) : <p className="empty">Предметы появятся после назначения преподаваний.</p>}
             </div>
-            <h2>Ближайшие учебные занятия</h2>
+            <div className="section-head upcoming-heading"><div><h2>Ближайшие занятия</h2></div><button className="link" onClick={() => navigate("sessions")}>Расписание <Icon name="arrow" size={15}/></button></div>
+
             <Sessions
               rows={(data.sessions || [])
                 .filter(
@@ -376,6 +458,7 @@ function App() {
           <>
             <Schedule
               source={data.schedule}
+              offerings={offerings}
               coordinator={coordinator}
               mutate={mutate}
             />
@@ -442,18 +525,7 @@ function App() {
                         >
                           Изменить
                         </button>
-                        <button
-                          className="link"
-                          onClick={() =>
-                            action(
-                              `sessions/${s.id}`,
-                              { cancelled: !s.cancelled },
-                              "PATCH",
-                            )
-                          }
-                        >
-                          {s.cancelled ? "Восстановить" : "Отменить"}
-                        </button>
+                        <button className="link" onClick={() => navigate("calendar")}>Отмена, ссылки и запись →</button>
                       </>
                     )
                   : null
@@ -463,6 +535,7 @@ function App() {
         )}
         {page === "homework" && (
           <>
+            <CourseworkPanel items={data.coursework||[]} offerings={offerings} staff={staff} api={api} onChanged={load}/>
             {staff && (
               <button
                 className="primary"
@@ -547,7 +620,7 @@ function App() {
                 </article>
               ))}
             </div>
-            {!data.homework?.length && <Empty />}
+            {!data.homework?.length&&!data.coursework?.length && <Empty />}
           </>
         )}
         {page === "attendance" && (
@@ -555,22 +628,24 @@ function App() {
             {(staff || me.role === "headman") && (
               <Journal
                 me={me}
+                api={api}
+                onChanged={load}
                 sessions={data.sessions || []}
                 offerings={data.offerings || []}
               />
             )}
+            {['student','headman'].includes(me.role)&&<>
             <h2>Моя посещаемость</h2>
             <List
               rows={data.attendance}
               render={(x) => (
                 <>
-                  <b>
-                    {x.course} · {x.title}
-                  </b>
+                  <div className="attendance-session"><b>{x.course} · {x.title}</b><time className="attendance-date" dateTime={x.starts_at}>{new Date(x.starts_at).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})} МСК</time></div>
                   <span>{statuses[x.status]}</span>
                 </>
               )}
             />
+            </>}
           </>
         )}
         {page === "debts" && (
@@ -578,12 +653,14 @@ function App() {
             data={data}
             staff={staff}
             offerings={offeringOptions}
+            owned={offerings}
             mutate={mutate}
             edit={edit}
           />
         )}
-        {page === "materials" && (
+        {page === "legacy-materials" && (
           <>
+            {materialCourse && <div className="material-filter"><span>Предмет: <strong>{materialCourse}</strong></span><button className="link" onClick={() => setMaterialCourse("")}>Все предметы ×</button></div>}
             {staff && (
               <button
                 className="primary"
@@ -607,7 +684,7 @@ function App() {
               </button>
             )}
             <List
-              rows={data.materials}
+              rows={(data.materials || []).filter(x => !materialCourse || x.course === materialCourse)}
               render={(x) => (
                 <>
                   <div>
@@ -653,7 +730,8 @@ function App() {
                     [
                       field("name", "Имя"),
                       field("position", "Ответственность"),
-                      field("email", "Рабочая почта", "email"),
+                      {...field("email", "Рабочая почта", "email"),required:false},
+                      {...field("telegram", "Telegram (@username)"),required:false},
                     ],
                     "contacts",
                   )
@@ -669,9 +747,8 @@ function App() {
                   <div>
                     <b>{x.name}</b>
                     <span>
-                      {x.position} · <a href={`mailto:${x.email}`}>{x.email}</a>{" "}
-                      · проверено{" "}
-                      {new Date(x.verified_at).toLocaleDateString("ru-RU")}
+                      {x.position}
+                    </span><span className="contact-links">{x.telegram&&<a href={`https://t.me/${x.telegram}`} target="_blank" rel="noreferrer">@{x.telegram} ↗</a>}{x.email&&<a href={`mailto:${x.email}`}>{x.email}</a>}
                     </span>
                   </div>
                   {coordinator && (
@@ -688,7 +765,8 @@ function App() {
                               "text",
                               x.position,
                             ),
-                            field("email", "Почта", "email", x.email),
+                            {...field("email", "Почта", "email", x.email),required:false},
+                            {...field("telegram", "Telegram (@username)", "text", x.telegram),required:false},
                           ],
                           `contacts/${x.id}`,
                           "PATCH",
@@ -705,8 +783,8 @@ function App() {
         )}
         {page === "projects" && (
           <>
+            <ProjectInterests api={api}/>
             <div className="section-head">
-              <h2>Найдите свою команду</h2>
               <button
                 className="primary"
                 onClick={() =>
@@ -725,7 +803,7 @@ function App() {
             </div>
             <div className="cards">
               {(data.projects || []).map((x) => (
-                <article key={x.id}>
+                <article key={x.id} id={`project-${x.id}`}>
                   <div className="meta">ПРОЕКТ · {x.owner}</div>
                   <h3>{x.title}</h3>
                   <p>{x.description}</p>
@@ -841,10 +919,18 @@ function App() {
             edit={edit}
           />
         )}
-        <footer>
-          ISAD HUB <span>Учёба · сообщество · проекты</span>
-        </footer>
+
       </main>
+      <section className="study-rail" aria-label="Дедлайны и быстрые переходы">
+        <div className="rail-heading"><span className="rail-symbol"><Icon name="sparkle" size={21}/></span><div><strong>Твой учебный ритм</strong></div></div>
+        <div className="rail-section-head"><h2>Ближайшие дедлайны</h2><span>{railDeadlines.length}</span></div>
+        <div className="deadline-list">{railDeadlines.length ? railDeadlines.slice(0, 4).map(x => <button key={x.key} onClick={() => navigate("calendar")}><span className={`deadline-dot ${x.priority === "Срок прошёл" ? "overdue" : ""}`}/><span><small>{x.course}</small><strong>{x.title}</strong><time dateTime={x.date}>{new Date(x.date + "T12:00:00+03:00").toLocaleDateString("ru-RU", {timeZone:"Europe/Moscow",day:"numeric",month:"long"})}{x.all_day ? " · время не указано" : ""}</time></span><Icon name="arrow" size={14}/></button>) : <div className="rail-empty"><Icon name="homework" size={26}/><strong>Ближайших сроков нет</strong><p>Данные проверены в учебном календаре.</p></div>}</div>
+        <div className="rail-divider"/>
+
+        <div className="quick-links"><button onClick={() => navigate("materials")}><span className="quick-icon rose"><Icon name="materials"/></span><span>Библиотека<small>Материалы: {data.materials?.length || 0}</small></span><Icon name="arrow" size={16}/></button><button onClick={() => navigate("projects")}><span className="quick-icon lilac"><Icon name="projects"/></span><span>Найти команду<small>Учебные проекты и идеи</small></span><Icon name="arrow" size={16}/></button><button onClick={() => navigate("contacts")}><span className="quick-icon mint"><Icon name="contacts"/></span><span>Быть на связи<small>Контакты кафедры</small></span><Icon name="arrow" size={16}/></button></div>
+
+
+      </section>
     </div>
   );
 }
@@ -890,504 +976,8 @@ function Sessions({ rows, actions }) {
     />
   );
 }
-function Schedule({ source, coordinator, mutate }) {
-  const [course, setCourse] = useState("2 курс"),
-    [group, setGroup] = useState(""),
-    [sub, setSub] = useState("1"),
-    [week, setWeek] = useState("upper"),
-    [preview, setPreview] = useState(null),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  const entries = source?.entries || [],
-    groups = [
-      ...new Set(entries.filter((x) => x.sheet === course).map((x) => x.group)),
-    ].sort((a, b) => a.localeCompare(b, "ru", { numeric: true })),
-    selected = groups.includes(group) ? group : groups[0] || "";
-  const rows = entries.filter(
-    (x) =>
-      x.sheet === course &&
-      x.group === selected &&
-      String(x.subgroup) === sub &&
-      x.week === week,
-  );
-  return (
-    <section>
-      <div className="section-head">
-        <h2>Расписание из Google Sheets</h2>
-        {coordinator && (
-          <button
-            className="primary"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                setPreview(await api("schedule/preview"));
-                setError("");
-              } catch (e) {
-                setError(e.message);
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            {busy ? "Читаем таблицу…" : "Проверить обновление"}
-          </button>
-        )}
-      </div>
-      <p className="source">
-        <a href={source?.source_url} target="_blank" rel="noreferrer">
-          Исходная таблица ↗
-        </a>{" "}
-        ·{" "}
-        {source?.published_at
-          ? `обновлено ${date(source.published_at)}`
-          : "ещё не опубликовано"}
-        . Верхняя и нижняя — обозначения строк исходной таблицы.
-      </p>
-      {error && <p className="error">{error}</p>}
-      {preview && (
-        <div className="form-panel">
-          <h3>Предварительный просмотр</h3>
-          <p>
-            Прочитано {preview.entries.length} записей:{" "}
-            {preview.groups.join(", ")}.
-          </p>
-          <p>
-            {preview.entries[0]?.day} · {preview.entries[0]?.title}
-          </p>
-          <button
-            className="primary"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                await mutate(`schedule/${preview.id}/publish`);
-                setPreview(null);
-              } catch (e) {
-                setError(e.message);
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            Опубликовать версию
-          </button>
-          <button className="link" onClick={() => setPreview(null)}>
-            Отмена
-          </button>
-        </div>
-      )}
-      <div className="filters">
-        <label>
-          Курс
-          <select
-            value={course}
-            onChange={(e) => {
-              setCourse(e.target.value);
-              setGroup("");
-            }}
-          >
-            {["2 курс", "3 курс", "4 курс"].map((c) => (
-              <option key={c}>{c}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Группа
-          <select value={selected} onChange={(e) => setGroup(e.target.value)}>
-            {groups.map((g) => (
-              <option key={g}>{g}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Подгруппа
-          <select value={sub} onChange={(e) => setSub(e.target.value)}>
-            <option value="1">1</option>
-            <option value="2">2</option>
-          </select>
-        </label>
-        <label>
-          Строка
-          <select value={week} onChange={(e) => setWeek(e.target.value)}>
-            <option value="upper">Верхняя</option>
-            <option value="lower">Нижняя</option>
-          </select>
-        </label>
-      </div>
-      <List
-        rows={rows}
-        render={(x) => (
-          <>
-            <div className="session-icon">{x.lesson}</div>
-            <div>
-              <b>
-                {x.day} · {x.title}
-              </b>
-              <span className="multiline">
-                {x.teacher} · {x.room}
-              </span>
-            </div>
-            <time>{x.time}</time>
-          </>
-        )}
-      />
-    </section>
-  );
-}
-function Journal({ sessions, offerings, me }) {
-  const [selected, setSelected] = useState(""),
-    [roster, setRoster] = useState(null),
-    [error, setError] = useState(""),
-    [busy, setBusy] = useState(false),
-    [from, setFrom] = useState(new Date().toISOString().slice(0, 8) + "01"),
-    [to, setTo] = useState(new Date().toISOString().slice(0, 10)),
-    [off, setOff] = useState("");
-  const refresh = () =>
-    selected
-      ? api(`sessions/${selected}/roster`)
-          .then((x) => {
-            setRoster(x);
-            setError("");
-          })
-          .catch((e) => {
-            setError(e.message);
-            setRoster(null);
-          })
-      : setRoster(null);
-  useEffect(() => {
-    refresh();
-  }, [selected]);
-  const update = async (student, status) => {
-    if (!status && !student.status) return;
-    let reason = "";
-    if (student.status && student.status !== status) {
-      reason = window.prompt("Причина исправления отметки") || "";
-      if (!reason) return;
-    }
-    setBusy(true);
-    try {
-      await api(`sessions/${selected}/attendance`, {
-        method: "PUT",
-        body: JSON.stringify({
-          student_id: student.id,
-          status: status || "unmarked",
-          reason,
-        }),
-      });
-      await refresh();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <section className="form-panel">
-      <h2>Журнал группы</h2>
-      <label>
-        Занятие
-        <select value={selected} onChange={(e) => setSelected(e.target.value)}>
-          <option value="">Выберите занятие…</option>
-          {sessions.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.group_name} · {s.title} · {date(s.starts_at)}
-            </option>
-          ))}
-        </select>
-      </label>
-      {error && <p className="error">{error}</p>}
-      {roster && (
-        <>
-          <List
-            rows={roster.students}
-            render={(s) => (
-              <>
-                <b>{s.name}</b>
-                <select
-                  aria-label={`Отметка: ${s.name}`}
-                  value={s.status || ""}
-                  disabled={busy || roster.cancelled}
-                  onChange={(e) => update(s, e.target.value)}
-                >
-                  <option value="">Не отмечен</option>
-                  {Object.entries(statuses).map(([k, v]) => (
-                    <option key={k} value={k}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-              </>
-            )}
-          />
-          <details>
-            <summary>История исправлений ({roster.history.length})</summary>
-            <List
-              rows={roster.history}
-              render={(x) => (
-                <span>
-                  {x.actor} · {statuses[x.status] || "Не отмечен"} ·{" "}
-                  {x.reason || "Первая отметка"} · {date(x.changed_at)}
-                </span>
-              )}
-            />
-          </details>
-        </>
-      )}
-      <h3>Выгрузить Excel</h3>
-      <p className="source">
-        Отменённые занятия исключаются. Неотмеченные и уважительные пропуски не
-        входят в знаменатель процента.
-      </p>
-      <div className="filters">
-        <label>
-          Преподавание
-          <select value={off} onChange={(e) => setOff(e.target.value)}>
-            <option value="">Выберите…</option>
-            {offerings.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.title} · {o.group_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          С
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </label>
-        <label>
-          По
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-          />
-        </label>
-        <button
-          className="primary"
-          disabled={!off || !from || !to}
-          onClick={async () => {
-            try {
-              const response = await fetch(
-                `/api/offerings/${off}/attendance.xlsx?from=${from}&to=${to}`,
-              );
-              if (!response.ok) throw Error((await response.json()).error);
-              const href = URL.createObjectURL(await response.blob()),
-                a = document.createElement("a");
-              a.href = href;
-              a.download = "attendance.xlsx";
-              a.click();
-              setTimeout(() => URL.revokeObjectURL(href), 1000);
-            } catch (e) {
-              setError(e.message);
-            }
-          }}
-        >
-          Скачать .xlsx
-        </button>
-      </div>
-    </section>
-  );
-}
-function Retakes({ data, staff, offerings, mutate, edit }) {
-  const [students, setStudents] = useState([]),
-    [off, setOff] = useState(""),
-    [error, setError] = useState("");
-  useEffect(() => {
-    if (off)
-      api(`offerings/${off}/students`)
-        .then(setStudents)
-        .catch((e) => setError(e.message));
-  }, [off]);
-  return (
-    <>
-      {error && <p className="error">{error}</p>}
-      {staff && (
-        <>
-          <div className="toolbar">
-            <select
-              aria-label="Предмет для задолженности"
-              value={off}
-              onChange={(e) => setOff(e.target.value)}
-            >
-              <option value="">Выберите преподавание…</option>
-              {offerings.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-            <button
-              className="primary"
-              disabled={!off}
-              onClick={() =>
-                edit(
-                  "Новая задолженность",
-                  [
-                    {
-                      name: "offering_id",
-                      label: "Предмет",
-                      options: offerings,
-                      value: off,
-                    },
-                    {
-                      name: "student_id",
-                      label: "Студент",
-                      options: students.map((s) => option(s.id, s.name)),
-                    },
-                    field("reason", "Основание", "textarea"),
-                    field("source", "Источник"),
-                  ],
-                  "debts",
-                )
-              }
-            >
-              + Задолженность
-            </button>
-            <button
-              className="primary"
-              onClick={() =>
-                edit(
-                  "Назначить пересдачу",
-                  [
-                    {
-                      name: "offering_id",
-                      label: "Предмет",
-                      options: offerings,
-                    },
-                    field("starts_at", "Дата и время", "datetime-local"),
-                    field("room", "Место"),
-                    field("capacity", "Число мест", "number"),
-                  ],
-                  "retakes",
-                )
-              }
-            >
-              + Пересдача
-            </button>
-          </div>
-        </>
-      )}
-      <h2>Задолженности</h2>
-      <List
-        rows={data.debts}
-        render={(x) => (
-          <>
-            <div>
-              <b>
-                {x.course} · {x.student}
-              </b>
-              <span>
-                {x.reason} · {x.closed ? "Закрыта" : "Открыта"} · источник:{" "}
-                {x.source}
-              </span>
-            </div>
-          </>
-        )}
-      />
-      <h2>Доступные пересдачи</h2>
-      <List
-        rows={data.retakes}
-        render={(x) => (
-          <>
-            <div>
-              <b>
-                {x.course} · {date(x.starts_at)}
-              </b>
-              <span>
-                {x.room} · свободно {Math.max(0, x.capacity - x.booked)} из{" "}
-                {x.capacity}
-              </span>
-            </div>
-            {!staff && (
-              <button
-                className="link"
-                disabled={
-                  x.booked >= x.capacity || new Date(x.starts_at) <= new Date()
-                }
-                onClick={() =>
-                  edit(
-                    "Записаться на пересдачу",
-                    [
-                      {
-                        name: "debt_id",
-                        label: "Задолженность",
-                        options: (data.debts || [])
-                          .filter(
-                            (d) => !d.closed && d.offering_id === x.offering_id,
-                          )
-                          .map((d) => option(d.id, d.reason)),
-                      },
-                    ],
-                    `retakes/${x.id}/register`,
-                  )
-                }
-              >
-                Записаться
-              </button>
-            )}
-          </>
-        )}
-      />
-      <h2>Записи и результаты</h2>
-      <List
-        rows={data.registrations}
-        render={(x) => (
-          <>
-            <div>
-              <b>
-                {x.course} · {x.student}
-              </b>
-              <span>
-                {date(x.starts_at)} ·{" "}
-                {x.result === "passed"
-                  ? "Сдано"
-                  : x.result === "failed"
-                    ? "Не сдано"
-                    : "Ожидается результат"}
-              </span>
-            </div>
-            {staff && !x.result && (
-              <button
-                className="link"
-                onClick={() =>
-                  edit(
-                    "Результат пересдачи",
-                    [
-                      {
-                        name: "debt_id",
-                        label: "Задолженность",
-                        options: [
-                          option(x.debt_id, `${x.student} · ${x.course}`),
-                        ],
-                        value: x.debt_id,
-                      },
-                      {
-                        name: "result",
-                        label: "Результат",
-                        options: [
-                          option("passed", "Сдано"),
-                          option("failed", "Не сдано"),
-                        ],
-                      },
-                      field("note", "Основание решения", "textarea"),
-                    ],
-                    `retakes/${x.retake_id}/result`,
-                  )
-                }
-              >
-                Внести результат
-              </button>
-            )}
-          </>
-        )}
-      />
-    </>
-  );
+function Retakes({data,staff,owned,mutate,edit}) {
+ return staff?<DebtManager data={data} offerings={owned} api={api} mutate={mutate} edit={edit}/>:<StudentDebts data={data} mutate={mutate}/>;
 }
 function Admin({ directory = {}, offerings = [], edit }) {
   const users = (directory.users || []).map((u) =>

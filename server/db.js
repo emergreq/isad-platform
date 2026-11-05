@@ -1,5 +1,6 @@
 import pg from "pg";
 export const pool = new pg.Pool({
+  options: '-c timezone=Europe/Moscow',
   connectionString:
     process.env.DATABASE_URL || "postgres://isad:isad@localhost:5432/isad",
 });
