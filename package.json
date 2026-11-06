@@ -12,6 +12,7 @@
     "seed": "node server/seed.js",
     "test:integration": "RUN_INTEGRATION=1 node --test test/integration.test.js",
     "test:mvp": "RUN_MVP_INTEGRATION=1 node --test test/mvp.integration.test.js",
+    "test:db": "RUN_DB_CHECKS=1 node --test test/db-logic.integration.test.js",
     "import:materials": "node scripts/import-course-materials.js",
     "dev:api": "node --watch server/index.js"
   },

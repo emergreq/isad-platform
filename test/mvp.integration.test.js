@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import pg from 'pg';
 import {hashPassword} from '../server/security.js';
+import {migrationFiles} from './migrations.js';
 
 test('MVP workflows use isolated portal and assistant databases',{skip:process.env.RUN_MVP_INTEGRATION!=='1'},async t=>{
  const source=new URL(process.env.DATABASE_URL||'postgres://isad:isad@db:5432/isad');
@@ -17,7 +18,7 @@ test('MVP workflows use isolated portal and assistant databases',{skip:process.e
  const files=await mkdtemp(join(tmpdir(),'isad-mvp-'));const children=[];let output='';
  const start=async(file,env,ready)=>{const child=spawn(process.execPath,[file],{env:{...process.env,...env},stdio:['ignore','pipe','pipe']});children.push(child);let log='';child.stdout.on('data',x=>{log+=x;output+=x;});child.stderr.on('data',x=>{log+=x;output+=x;});await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{clearInterval(tick);reject(Error(log));},12000);const tick=setInterval(()=>{if(log.includes(ready)){clearTimeout(timer);clearInterval(tick);resolve();}else if(child.exitCode!==null){clearTimeout(timer);clearInterval(tick);reject(Error(log));}},40);});return child;};
  try{
-  for(const file of ['001_initial.sql','002_workflows.sql','003_mvp.sql','004_schedule_source.sql','005_profile_group.sql','006_contest_link.sql','007_project_interests.sql','008_course_requirements.sql','009_session_reschedule.sql','010_joint_groups.sql','011_coursework.sql','012_retake_days.sql','013_lesson_materials.sql','014_contacts_telegram.sql','015_retake_assignments.sql'])await db.query(await readFile(new URL('../db/'+file,import.meta.url),'utf8'));
+  for(const file of await migrationFiles())await db.query(await readFile(new URL('../db/'+file,import.meta.url),'utf8'));
   const hash=await hashPassword('integration-pass');
   for(const [name,role] of [['student','student'],['teacher','teacher'],['other','student'],['coordinator','coordinator'],['teacher2','teacher']])await db.query('INSERT INTO users(name,email,role,password_hash) VALUES($1,$2,$3,$4)',[name,name+'@test.local',role,hash]);
   await db.query("INSERT INTO groups(name) VALUES('A'),('B');INSERT INTO memberships(user_id,group_id,starts_on) VALUES(1,1,'2020-01-01'),(3,2,'2020-01-01');INSERT INTO courses(title) VALUES('Базы данных'),('Другой предмет');INSERT INTO offerings(course_id,teacher_id,group_id,semester) VALUES(1,2,1,'test'),(2,5,2,'test');");
@@ -191,7 +192,7 @@ test('MVP workflows use isolated portal and assistant databases',{skip:process.e
    assert.ok((await request('student','profile')).data.group_options.some(x=>x.name==='C'));
    assert.equal((await request('student','profile/group','POST',{group:'Unknown',subgroup:1})).status,400);
    assert.equal((await request('teacher','profile/group','POST',{group:'B',subgroup:1})).status,403);
-   await db.query("INSERT INTO attendance(session_id,student_id,status,updated_by) VALUES($1,1,'present',2)",[session.id]);
+   await db.query("INSERT INTO attendance(session_id,student_id,status,updated_by) SELECT id,1,'present',2 FROM sessions WHERE offering_id=1 AND NOT cancelled ORDER BY id LIMIT 1");
    const previousAttendance=(await db.query('SELECT count(*)::int n FROM attendance WHERE student_id=1')).rows[0].n;
    assert.equal((await request('student','profile/group','POST',{group:'B',subgroup:2})).status,200);
    const profile=(await request('student','profile')).data;assert.deepEqual(profile.groups.map(g=>g.name),['B']);assert.equal(profile.subgroup,2);

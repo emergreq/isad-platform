@@ -11,25 +11,12 @@ import {fail,number,text,day,instant,webUrl,json,readAccess,offering,notify} fro
 const rows=async(sql,args=[],c=pool)=>(await c.query(sql,args)).rows;
 const staff=u=>{if(!['teacher','coordinator'].includes(u.role))throw fail(403,'Доступно преподавателю');};
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+const str=v=>typeof v==='string'?v:null;
+const int=v=>Number.isSafeInteger(Number(v))&&v!==null&&v!==''?Number(v):null;
 export async function calendar(u,from,to){
- const args=[u.id,u.role,from,to];
- const events=await rows(`SELECT e.*,to_char(e.event_date,'YYYY-MM-DD') event_date,f.original_name requirements_name,CASE WHEN rm.published OR o.teacher_id=$1 OR $2='coordinator' THEN '/api/files/'||f.id END requirements_url,c.title course,g.name group_name,offering_group_names(o.id) group_names,
- COALESCE((SELECT done FROM event_progress ep WHERE ep.event_id=e.id AND ep.user_id=$1),false) done
- FROM calendar_events e JOIN offerings o ON o.id=e.offering_id JOIN courses c ON c.id=o.course_id JOIN groups g ON g.id=o.group_id LEFT JOIN coursework cw ON cw.event_id=e.id LEFT JOIN stored_files f ON f.id=cw.requirements_file_id LEFT JOIN materials rm ON rm.id=f.material_id
- WHERE ${readAccess} AND e.event_date BETWEEN $3::date AND $4::date AND (e.status<>'draft' OR $2='coordinator' OR o.teacher_id=$1) ORDER BY e.event_date,e.starts_at NULLS LAST,e.id`,args);
- const sessions=await rows(`SELECT s.*,c.title course,g.name group_name,offering_group_names(o.id) group_names FROM sessions s JOIN offerings o ON o.id=s.offering_id JOIN courses c ON c.id=o.course_id JOIN groups g ON g.id=o.group_id
- WHERE ${readAccess} AND (s.starts_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $3::date AND $4::date ORDER BY s.starts_at`,args);
- const homework=await rows(`SELECT h.*,s.cancelled,o.id offering_id,c.title course,g.name group_name,offering_group_names(o.id) group_names,
- EXISTS(SELECT 1 FROM homework_done hd WHERE hd.homework_id=h.id AND hd.user_id=$1) done
- FROM homework h JOIN sessions s ON s.id=h.session_id JOIN offerings o ON o.id=s.offering_id JOIN courses c ON c.id=o.course_id JOIN groups g ON g.id=o.group_id
- WHERE ${readAccess} AND (h.due_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $3::date AND $4::date ORDER BY h.due_at`,args);
- const appointments=await rows(`SELECT r.*,c.title course,g.name group_name,offering_group_names(o.id) group_names FROM retakes r JOIN offerings o ON o.id=r.offering_id JOIN courses c ON c.id=o.course_id JOIN groups g ON g.id=o.group_id WHERE (o.teacher_id=$1 OR $2='coordinator' OR EXISTS(SELECT 1 FROM retake_registrations x JOIN debts d ON d.id=x.debt_id WHERE x.retake_id=r.id AND d.student_id=$1)) AND (r.starts_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $3::date AND $4::date`,args);
- return [
-  ...appointments.map(r=>({...r,source_type:'retake',source_id:r.id,key:'retake:'+r.id,title:r.kind==='retake'?'Пересдача':'Сдача долгов',description:r.room+(r.change_reason?' · '+r.change_reason:''),date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow'}).format(new Date(r.starts_at)),all_day:false,status:r.status==='cancelled'?'cancelled':'published'})),
-  ...events.map(e=>({...e,source_type:'event',source_id:e.id,key:'event:'+e.id,date:e.event_date,starts_at:e.starts_at,all_day:!e.starts_at})),
-  ...sessions.map(s=>({...s,source_type:'session',source_id:s.id,key:'session:'+s.id,kind:'session',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow'}).format(new Date(s.starts_at)),status:s.cancelled?'cancelled':'published'})),
-  ...homework.map(h=>({...h,source_type:'homework',source_id:h.id,key:'homework:'+h.id,kind:'homework',date:new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow'}).format(new Date(h.due_at)),starts_at:h.due_at,status:'published'})),
- ].sort((a,b)=>(String(a.date).slice(0,10)+(a.starts_at||'')).localeCompare(String(b.date).slice(0,10)+(b.starts_at||'')));
+ // Календарь собирает база: представление calendar_items + функция calendar_for (db/016).
+ // Права доступа, черновики и личные отметки «выполнено» тоже считаются там.
+ return (await rows('SELECT item FROM calendar_for($1,$2::date,$3::date) AS item',[u.id,from,to])).map(r=>r.item);
 }
 export async function mvp(req,res,u){
  const fileResult=await libraryRoutes(req,res,u);if(fileResult!==undefined)return fileResult;
@@ -99,19 +86,21 @@ export async function mvp(req,res,u){
  if(method==='GET'&&p==='/api/notifications')return notificationsWithLinks(u);
  if(method==='POST'&&p==='/api/notifications/read'){await pool.query('UPDATE notifications SET read_at=now() WHERE recipient_id=$1 AND read_at IS NULL',[u.id]);return {ok:true};}
  if(method==='POST'&&(m=p.match(/^\/api\/sessions\/(\d+)\/cancel$/))){
-  const b=await json(req),s=(await rows('SELECT * FROM sessions WHERE id=$1',[number(m[1])]))[0];if(!s)throw fail(404,'Занятие не найдено');await offering(u,s.offering_id,true);
+  const b=await json(req),sid=number(m[1]);
   let replacement=null;if(b.replacement){replacement={title:text(b.replacement.title,200),description:text(b.replacement.description,4000),due_at:instant(b.replacement.due_at)};}
-  await pool.query('CALL cancel_study_session($1,$2,$3,$4,$5)',[s.id,u.id,text(b.reason,1000),replacement,String(b.request_key||'').slice(0,150)]);return (await rows('SELECT * FROM sessions WHERE id=$1',[s.id]))[0];
+  // права, отмена, задание взамен, журнал и уведомления — в процедуре cancel_study_session (db/016)
+  await pool.query('CALL cancel_study_session($1,$2,$3,$4,$5)',[sid,u.id,text(b.reason,1000),replacement,String(b.request_key||'').slice(0,150)]);
+  return (await rows('SELECT * FROM sessions WHERE id=$1',[sid]))[0];
  }
  if(method==='PATCH'&&(m=p.match(/^\/api\/sessions\/(\d+)\/meeting$/))){
-  const b=await json(req);return transaction(async c=>{const s=(await rows('SELECT * FROM sessions WHERE id=$1 FOR UPDATE',[number(m[1])],c))[0];if(!s)throw fail(404,'Занятие не найдено');await offering(u,s.offering_id,true,c);if(!['current_only','future_default','none'].includes(b.scope))throw fail(400,'Выберите режим ссылки');const meeting=b.scope==='none'?null:webUrl(b.url,false);await c.query('UPDATE sessions SET meeting_url=$2 WHERE id=$1',[s.id,meeting]);if(b.scope==='future_default'){
-    const weekday=(await rows("SELECT extract(isodow FROM $1::timestamptz AT TIME ZONE 'Europe/Moscow')::integer weekday",[s.starts_at],c))[0].weekday;
-    const rule=(await rows('SELECT weekday FROM meeting_links WHERE offering_id=$1 AND weekday IN (0,$2) ORDER BY weekday DESC LIMIT 1',[s.offering_id,weekday],c))[0];
-    await c.query('INSERT INTO meeting_links(offering_id,weekday,url,provider) VALUES($1,$2,$3,$4) ON CONFLICT(offering_id,weekday) DO UPDATE SET url=EXCLUDED.url,provider=EXCLUDED.provider',[s.offering_id,rule?.weekday||0,meeting,String(b.provider||'').slice(0,100)]);
-    await c.query('UPDATE offerings SET current_meeting_url=$2,provider=$3 WHERE id=$1',[s.offering_id,meeting,String(b.provider||'').slice(0,100)]);
-   }await notify(c,s.offering_id,`meeting:${s.id}:${Date.now()}`,'Изменена ссылка занятия',s.title,'calendar',s.id);return {ok:true};});
+  const b=await json(req),url=['current_only','future_default'].includes(b.scope)?webUrl(b.url,false):null;
+  // права, ссылка пары, правило по дню недели и уведомления — в функции set_session_meeting (db/016)
+  await pool.query('SELECT set_session_meeting($1,$2,$3,$4,$5)',[number(m[1]),u.id,str(b.scope),url,String(b.provider||'')]);
+  return {ok:true};
  }
- if(method==='PATCH'&&(m=p.match(/^\/api\/sessions\/(\d+)\/recording$/))){const b=await json(req),s=(await rows('SELECT * FROM sessions WHERE id=$1',[number(m[1])]))[0];if(!s)throw fail(404,'Занятие не найдено');await offering(u,s.offering_id,true);await pool.query('UPDATE sessions SET recording_url=$2 WHERE id=$1',[s.id,b.url?webUrl(b.url,false):null]);return {ok:true};}
+ if(method==='PATCH'&&(m=p.match(/^\/api\/sessions\/(\d+)\/recording$/))){const b=await json(req),s=(await rows('SELECT * FROM sessions WHERE id=$1',[number(m[1])]))[0];if(!s)throw fail(404,'Занятие не найдено');await offering(u,s.offering_id,true);
+  // set_actor: триггер sessions_audit запишет в журнал, кто поменял запись
+  await transaction(async c=>{await c.query('SELECT set_actor($1)',[u.id]);await c.query('UPDATE sessions SET recording_url=$2 WHERE id=$1',[s.id,b.url?webUrl(b.url,false):null]);});return {ok:true};}
  if(method==='GET'&&p==='/api/hackathons')return rows('SELECT * FROM hackathons WHERE NOT is_demo OR id=(SELECT min(id) FROM hackathons WHERE is_demo) ORDER BY starts_on NULLS LAST,id DESC');
  if(method==='POST'&&p==='/api/hackathons'){staff(u);const b=await json(req);if(b.starts_on&&b.ends_on&&b.ends_on<b.starts_on)throw fail(400,'Конец раньше начала');return (await rows('INSERT INTO hackathons(title,description,organizer,starts_on,ends_on,source_url,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',[text(b.title,200),String(b.description||'').slice(0,4000),String(b.organizer||'').slice(0,200),b.starts_on?day(b.starts_on):null,b.ends_on?day(b.ends_on):null,webUrl(b.source_url),u.id]))[0];}
  if(method==='GET'&&p==='/api/profile'){
@@ -130,17 +119,21 @@ export async function mvp(req,res,u){
  }
  if(method==='GET'&&p==='/api/credit-requests')return rows(`SELECT cr.*,u.name student,c.title course,g.name group_name,offering_group_names(o.id) group_names,h.title hackathon FROM credit_requests cr JOIN users u ON u.id=cr.student_id JOIN offerings o ON o.id=cr.offering_id JOIN courses c ON c.id=o.course_id JOIN groups g ON g.id=o.group_id JOIN hackathons h ON h.id=cr.hackathon_id WHERE cr.student_id=$1 OR (o.teacher_id=$1 AND $2='teacher') OR $2='coordinator' ORDER BY cr.created_at DESC`,[u.id,u.role]);
  if(method==='POST'&&p==='/api/credit-requests'){
-  if(!['student','headman'].includes(u.role))throw fail(403,'Доступно студенту');const b=await json(req),o=await offering(u,b.offering_id);
-  const a=(await rows('SELECT * FROM achievements WHERE id=$1 AND owner_id=$2',[number(b.achievement_id),u.id]))[0];if(!a||!a.hackathon_id)throw fail(400,'Выберите своё достижение с хакатоном');if(!['assignment','coursework','whole_course'].includes(b.requested_scope))throw fail(400,'Выберите объём зачёта');
-  return transaction(async c=>{const cr=(await rows('INSERT INTO credit_requests(student_id,offering_id,achievement_id,hackathon_id,snapshot,requested_scope) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[u.id,o.id,a.id,a.hackathon_id,a,b.requested_scope],c))[0];await c.query('INSERT INTO notifications(recipient_id,event_key,title,message,target_page,target_id) VALUES($1,$2,$3,$4,$5,$6)',[o.teacher_id,'credit:'+cr.id,'Новая заявка на зачёт',o.course+' · '+u.name,'hackathons',cr.id]);return cr;});
+  const b=await json(req);
+  // роль, доступ к предмету, достижение, снимок и уведомление преподавателю — в create_credit_request (db/016)
+  return (await rows('SELECT * FROM create_credit_request($1,$2,$3,$4)',[u.id,number(b.offering_id),number(b.achievement_id),str(b.requested_scope)]))[0];
  }
  if(method==='POST'&&(m=p.match(/^\/api\/credit-requests\/(\d+)\/decision$/))){
-  const b=await json(req);if(!['approved','rejected','needs_info'].includes(b.status))throw fail(400,'Выберите решение');
-  return transaction(async c=>{const cr=(await rows('SELECT * FROM credit_requests WHERE id=$1 FOR UPDATE',[number(m[1])],c))[0];if(!cr)throw fail(404,'Заявка не найдена');await offering(u,cr.offering_id,true,c);
-   if(cr.status!=='pending'||cr.version!==Number(b.version))throw fail(409,'Заявка уже изменена или рассмотрена');const comment=text(b.comment,4000);const scope=b.status==='approved'?b.decision_scope:null;if(scope&&!['assignment','coursework','whole_course'].includes(scope))throw fail(400,'Выберите объём решения');if(b.status==='approved'&&!scope)throw fail(400,'Укажите объём зачёта');
-   const result=(await rows('UPDATE credit_requests SET status=$2,comment=$3,decision_scope=$4,reviewed_by=$5,reviewed_at=now(),version=version+1 WHERE id=$1 RETURNING *',[cr.id,b.status,comment,scope,u.id],c))[0];await c.query('INSERT INTO credit_history(request_id,actor_id,status,snapshot) VALUES($1,$2,$3,$4)',[cr.id,u.id,b.status,result]);await c.query('INSERT INTO notifications(recipient_id,event_key,title,message,target_page,target_id) VALUES($1,$2,$3,$4,$5,$6)',[cr.student_id,'credit-decision:'+cr.id+':'+result.version,'Рассмотрена заявка на зачёт',comment,'hackathons',cr.id]);return result;});
+  const b=await json(req);
+  // блокировка, версия, правила статусов, история и уведомление студенту — в decide_credit_request (db/016)
+  return (await rows('SELECT * FROM decide_credit_request($1,$2,$3,$4,$5,$6)',[number(m[1]),u.id,int(b.version),str(b.status),str(b.decision_scope),str(b.comment)]))[0];
  }
- if(method==='POST'&&(m=p.match(/^\/api\/credit-requests\/(\d+)\/resubmit$/))){const b=await json(req);return transaction(async c=>{const cr=(await rows('SELECT * FROM credit_requests WHERE id=$1 AND student_id=$2 FOR UPDATE',[number(m[1]),u.id],c))[0];if(!cr)throw fail(404,'Заявка не найдена');if(cr.status!=='needs_info'||cr.version!==Number(b.version))throw fail(409,'Заявка уже изменена');const updated={...cr.snapshot,contribution:text(b.contribution)};await c.query("UPDATE credit_requests SET status='pending',snapshot=$2,version=version+1,reviewed_by=NULL,reviewed_at=NULL,decision_scope=NULL WHERE id=$1",[cr.id,updated]);const o=await offering(u,cr.offering_id,false,c);await c.query('INSERT INTO notifications(recipient_id,event_key,title,message,target_page,target_id) VALUES($1,$2,$3,$4,$5,$6)',[o.teacher_id,`credit-resubmit:${cr.id}:${cr.version+1}`,'Заявка дополнена',u.name,'hackathons',cr.id]);return {ok:true};});}
+ if(method==='POST'&&(m=p.match(/^\/api\/credit-requests\/(\d+)\/resubmit$/))){
+  const b=await json(req);
+  // проверка статуса и версии, новый снимок, история и уведомление преподавателю — в resubmit_credit_request (db/016)
+  await pool.query('SELECT resubmit_credit_request($1,$2,$3,$4)',[number(m[1]),u.id,int(b.version),str(b.contribution)]);
+  return {ok:true};
+ }
  if(method==='GET'&&p==='/api/projects/recommended')return rows(`SELECT p.id,p.title,r.title position,r.skills,r.capacity,COALESCE((SELECT json_agg(s.name) FROM user_skills us JOIN skills s ON s.id=us.skill_id WHERE us.user_id=$1 AND lower(r.skills) LIKE '%'||lower(s.name)||'%'),'[]') matched_skills FROM projects p JOIN project_roles r ON r.project_id=p.id WHERE (SELECT count(*) FROM project_members pm WHERE pm.role_id=r.id)<r.capacity ORDER BY p.id DESC`,[u.id]);
  return undefined;
 }

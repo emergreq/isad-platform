@@ -6,6 +6,19 @@ import { pool, transaction } from "./db.js";
 import { verifyPassword, newToken, tokenHash } from "./security.js";
 const port = Number(process.env.PORT || 3000);
 const fail = (status, message) => Object.assign(new Error(message), { status });
+// Ошибки PostgreSQL -> HTTP-статус. IH*** — свои коды из процедур и триггеров (db/016):
+// их текст написан для пользователя и показывается как есть.
+// 23505 уникальность, 23503 внешний ключ, 23514 CHECK, 23502 NOT NULL.
+const DB_ERRORS = {
+  IH403: 403,
+  IH404: 404,
+  IH409: 409,
+  IH422: 422,
+  23505: 409,
+  23503: 400,
+  23514: 400,
+  23502: 400,
+};
 async function body(req) {
   let s = "";
   for await (const chunk of req) {
@@ -61,6 +74,8 @@ async function main(req, res) {
       "INSERT INTO login_sessions(token_hash,user_id,expires_at) VALUES ($1,$2,now()+interval '12 hours')",
       [tokenHash(t), r.rows[0].id],
     );
+    // заодно удаляем просроченные входы (функция БД из db/016)
+    await pool.query("SELECT cleanup_expired_sessions()");
     res.setHeader(
       "Set-Cookie",
       `sid=${t}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,
@@ -185,33 +200,10 @@ async function main(req, res) {
     ).rows;
   if (req.method === "POST" && /^\/api\/applications\/\d+\/accept$/.test(p)) {
     const id = number(p.split("/")[3]);
-    return transaction(async (c) => {
-      const a = await c.query(
-        "SELECT a.*,r.project_id,r.capacity,p.owner_id FROM applications a JOIN project_roles r ON r.id=a.role_id JOIN projects p ON p.id=r.project_id WHERE a.id=$1 FOR UPDATE OF a,r",
-        [id],
-      );
-      if (!a.rowCount || a.rows[0].owner_id !== u.id)
-        throw fail(404, "Заявка не найдена");
-      const x = a.rows[0];
-      if (x.status !== "pending") throw fail(409, "Заявка уже рассмотрена");
-      const count = await c.query(
-        "SELECT count(*)::int n FROM project_members WHERE role_id=$1",
-        [x.role_id],
-      );
-      if (count.rows[0].n >= x.capacity) throw fail(409, "Свободных мест нет");
-      await c.query(
-        "INSERT INTO project_members(project_id,user_id,role_id) VALUES($1,$2,$3)",
-        [x.project_id, x.user_id, x.role_id],
-      );
-      await c.query("UPDATE applications SET status='accepted' WHERE id=$1", [
-        id,
-      ]);
-      await c.query(
-        "INSERT INTO application_events(application_id,actor_id,status) VALUES($1,$2,'accepted')",
-        [id, u.id],
-      );
-      return { ok: true };
-    });
+    // владелец, статус отклика, блокировка и лимит мест — в функции accept_application
+    // и триггере project_members_capacity (db/016)
+    await pool.query("SELECT accept_application($1,$2)", [id, u.id]);
+    return { ok: true };
   }
   throw fail(404, "Маршрут не найден");
 }
@@ -234,15 +226,14 @@ http
       if (!res.writableEnded) res.end(JSON.stringify(data));
     } catch (e) {
       console.error(e.message);
-      const status =
-        e.status || (e.code === "23505" ? 409 : e.code === "23503" ? 400 : 500);
+      const status = e.status || DB_ERRORS[e.code] || 500;
       res.statusCode = status;
       res.end(
         JSON.stringify({
           error:
             status === 500
               ? "Внутренняя ошибка сервера"
-              : e.status
+              : e.status || String(e.code).startsWith("IH")
                 ? e.message
                 : "Данные нарушают ограничения",
         }),

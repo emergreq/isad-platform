@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { migrationFiles } from "./migrations.js";
 import ExcelJS from "exceljs";
 import { hashPassword } from "../server/security.js";
 
@@ -20,7 +21,7 @@ test(
     const db = new pg.Pool({ connectionString: source.href });
     let child;
     try {
-      for (const file of ["001_initial.sql", "002_workflows.sql", "003_mvp.sql", "004_schedule_source.sql", "005_profile_group.sql", "006_contest_link.sql", "007_project_interests.sql", "008_course_requirements.sql", "009_session_reschedule.sql", "010_joint_groups.sql", "011_coursework.sql", "012_retake_days.sql", "013_lesson_materials.sql", "014_contacts_telegram.sql", "015_retake_assignments.sql"])
+      for (const file of await migrationFiles())
         await db.query(
           await readFile(new URL("../db/" + file, import.meta.url), "utf8"),
         );
