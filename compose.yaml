@@ -21,8 +21,8 @@ services:
     environment:
       DATABASE_URL: postgres://isad:isad@db:5432/isad
       APP_ORIGIN: http://localhost:5173
-      ASSISTANT_DATABASE_URL: postgres://isad_assistant:${ASSISTANT_DB_PASSWORD:-assistant_local_demo_only}@db:5432/isad_assistant
-      ASSISTANT_SHARED_SECRET: ${ASSISTANT_SHARED_SECRET:-local-development-secret-change-before-hosting}
+      ASSISTANT_DATABASE_URL: postgres://isad_assistant:${ASSISTANT_DB_PASSWORD:?Run scripts/init-local-secrets.js first}@db:5432/isad_assistant
+      ASSISTANT_SHARED_SECRET: ${ASSISTANT_SHARED_SECRET:?Run scripts/init-local-secrets.js first}
       ASSISTANT_URL: http://assistant:3001
     ports: ["127.0.0.1:3000:3000", "127.0.0.1:5173:5173"]
     depends_on:
@@ -38,8 +38,8 @@ services:
       - path: .env
         required: false
     environment:
-      ASSISTANT_DATABASE_URL: postgres://isad_assistant:${ASSISTANT_DB_PASSWORD:-assistant_local_demo_only}@db:5432/isad_assistant
-      ASSISTANT_SHARED_SECRET: ${ASSISTANT_SHARED_SECRET:-local-development-secret-change-before-hosting}
+      ASSISTANT_DATABASE_URL: postgres://isad_assistant:${ASSISTANT_DB_PASSWORD:?Run scripts/init-local-secrets.js first}@db:5432/isad_assistant
+      ASSISTANT_SHARED_SECRET: ${ASSISTANT_SHARED_SECRET:?Run scripts/init-local-secrets.js first}
     command: node assistant/server.js
     depends_on:
       db: { condition: service_healthy }

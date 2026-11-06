@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-export const SOURCE_URL =
-  "https://docs.google.com/spreadsheets/d/1pdaNyN6E758FPuXSMx9RQdSzUL_y1aZ15pzGuAS0up0/edit?gid=61443210";
-export const CSV_URL =
-  "https://docs.google.com/spreadsheets/d/1pdaNyN6E758FPuXSMx9RQdSzUL_y1aZ15pzGuAS0up0/export?format=csv&gid=61443210";
+import {loadPrivateData} from './private-data.js';
+const privateData=loadPrivateData();
+export const SOURCE_URL=process.env.SCHEDULE_SOURCE_URL||privateData.scheduleSource||'';
+const sheetId=SOURCE_URL.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1];
+export const CSV_URL=sheetId?`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=61443210`:'';
 export function parseCSV(text) {
   const rows = [];
   let row = [],
@@ -118,6 +119,7 @@ export function parseSchedule(text, sheet = SHEETS[0]) {
   };
 }
 async function fetchSheet(sheet) {
+  if(!CSV_URL)throw Error("Источник расписания не настроен: укажите SCHEDULE_SOURCE_URL или приватный файл");
   const response = await fetch(
     CSV_URL.replace("gid=61443210", `gid=${sheet.gid}`),
     { signal: AbortSignal.timeout(20000) },

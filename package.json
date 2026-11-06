@@ -14,7 +14,10 @@
     "test:mvp": "RUN_MVP_INTEGRATION=1 node --test test/mvp.integration.test.js",
     "test:db": "RUN_DB_CHECKS=1 node --test test/db-logic.integration.test.js",
     "import:materials": "node scripts/import-course-materials.js",
-    "dev:api": "node --watch server/index.js"
+    "dev:api": "node --watch server/index.js",
+    "secrets:init": "node scripts/init-local-secrets.js",
+    "accounts:show": "node scripts/show-local-accounts.js",
+    "import:private": "node scripts/import-private-data.js"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

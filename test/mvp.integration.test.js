@@ -179,8 +179,8 @@ test('MVP workflows use isolated portal and assistant databases',{skip:process.e
    assert.equal((await request('teacher',`sessions/${s.id}/attendance`,'PUT',{student_id:1,status:'absent'})).status,400);
    assert.equal((await request('teacher',`sessions/${s.id}/attendance`,'PUT',{student_id:1,status:'absent',reason:'Исправление'})).status,200);
    assert.equal((await request('teacher',`sessions/${s.id}/roster`)).data.students.find(x=>x.id===1).status,'absent');
-   assert.equal((await request('student','profile','PATCH',{name:'Анна Алексеевна Игнатова',bio:'',skills:[]})).status,200);
-   assert.equal((await request('student','me')).data.name,'Анна Алексеевна Игнатова');
+   assert.equal((await request('student','profile','PATCH',{name:'Тестовый Студент',bio:'',skills:[]})).status,200);
+   assert.equal((await request('student','me')).data.name,'Тестовый Студент');
    assert.equal((await request('other','me')).data.name,'other');
   });
   await t.test('profile group selection updates all teaching access and keeps past records',async()=>{

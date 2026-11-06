@@ -4,7 +4,7 @@
 
 ## Что подготовлено
 
-Проект: C:\Users\LEDI\Desktop\isad-platform. Открывайте эту папку через «Открыть папку» в редакторе или Codex. Этот чат первоначально открыт для другой папки в Documents.
+Проект: %USERPROFILE%\Desktop\isad-platform. Открывайте эту папку через «Открыть папку» в редакторе или Codex. Этот чат первоначально открыт для другой папки в Documents.
 
 Копия обновлена до 304e84e (main). Это React + Vite (интерфейс), Node.js (API), PostgreSQL (база). Docker Compose поднимает приложение и базу вместе. Есть роли студента, старосты, преподавателя, координатора; занятия, ДЗ, посещаемость, пересдачи, материалы, проекты, Excel-выгрузка. Расписание читается из Google Sheets и публикуется координатором вручную. Данные демонстрационные. Отзывы, ML-лаборатория и ИИ-ассистент пока отсутствуют. Подробности — в README.md.
 
@@ -30,7 +30,7 @@ docker compose exec app npm run seed
 
 Откройте http://localhost:5173. API: http://localhost:3000 (запросам обычно нужен вход). PostgreSQL с Windows: localhost:55433, база/пользователь/пароль — isad; внутри Docker адрес db:5432.
 
-Демоаккаунты: student@example.org (студент), headman@example.org (староста), teacher@example.org (преподаватель), coordinator@example.org (координатор), student2@example.org (другая группа). Общий пароль: demo-change-me.
+Демоаккаунты: student@example.org (студент), headman@example.org (староста), teacher@example.org (преподаватель), coordinator@example.org (координатор), student2@example.org (другая группа). Общий пароль: [пароль хранится только локально].
 
 ## Следующие запуски
 

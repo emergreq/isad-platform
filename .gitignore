@@ -4,3 +4,11 @@ dist/
 
 .DS_Store
 work/
+
+.env.*
+!.env.example
+*.key
+*.pem
+compose.override.yaml
+
+private/

@@ -1,3 +1,4 @@
+import {loadPrivateData} from '../server/private-data.js';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {pool,transaction} from '../server/db.js';
@@ -6,16 +7,15 @@ import {parseSchedule,SHEETS} from '../server/schedule.js';
 import {saveFile,assistantCall} from '../server/library.js';
 const root=process.env.IMPORT_DIR||'work/course-import';
 const manifest=JSON.parse(await readFile(root+'/manifest.json','utf8'));
-const password=await hashPassword('demo-change-me');
+const privateData=loadPrivateData({required:true});
+if(!process.env.DEMO_PASSWORD||process.env.DEMO_PASSWORD.length<16)throw Error('Set a private DEMO_PASSWORD in .env');
+const password=await hashPassword(process.env.DEMO_PASSWORD);
 const identity=async(c,name,email,role='teacher')=>(await c.query('INSERT INTO users(name,email,role,password_hash) VALUES($1,$2,$3,$4) ON CONFLICT(email) DO UPDATE SET name=EXCLUDED.name RETURNING id',[name,email,role,password])).rows[0].id;
 const context=await transaction(async c=>{
  const group=(await c.query("INSERT INTO groups(name) VALUES('БИВТ-25-6-1') ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING id")).rows[0].id;
  const admin=(await c.query("SELECT id FROM users WHERE role='coordinator' ORDER BY id LIMIT 1")).rows[0]?.id;if(!admin)throw Error('Нужен координатор портала');
- const zimin=await identity(c,'Иван Зимин','zimin.demo@isad.local');
- const math=await identity(c,'Яремко Н. Н.','math.demo@isad.local');
- const algo=await identity(c,'Куренков В. В.','algorithms.demo@isad.local');
- const python=await identity(c,'Овчинников С. А.','python.demo@isad.local');
- const offers={};for(const [title,teacher] of [['Базы данных',zimin],['Математика',math],['Алгоритмы и структуры данных',algo],['Практикум программирования на Python',python]]){
+ const offers={};for(const item of privateData.teachers||[]){
+  const teacher=await identity(c,item.name,item.email),title=item.course;
   const course=(await c.query('INSERT INTO courses(title) VALUES($1) ON CONFLICT(title) DO UPDATE SET title=EXCLUDED.title RETURNING id',[title])).rows[0].id;
   let offer=(await c.query("SELECT id FROM offerings WHERE course_id=$1 AND group_id=$2 AND semester='2026 осень' ORDER BY id LIMIT 1",[course,group])).rows[0];
   if(!offer)offer=(await c.query("INSERT INTO offerings(course_id,teacher_id,group_id,semester) VALUES($1,$2,$3,'2026 осень') RETURNING id",[course,teacher,group])).rows[0];offers[title]=offer.id;
@@ -29,7 +29,7 @@ const context=await transaction(async c=>{
   await c.query("INSERT INTO memberships(user_id,group_id,starts_on) SELECT $1,$2,'2026-09-01' WHERE NOT EXISTS(SELECT 1 FROM memberships WHERE user_id=$1 AND group_id=$2 AND starts_on='2026-09-01')",[student.id,group]);
  }
  const head=(await c.query("SELECT id FROM users WHERE email='headman@example.org'")).rows[0];if(head){await c.query("UPDATE headman_assignments SET ends_on='2026-08-31' WHERE user_id=$1 AND group_id<>$2 AND starts_on<'2026-09-01' AND (ends_on IS NULL OR ends_on>='2026-09-01')",[head.id,group]);await c.query("INSERT INTO headman_assignments(user_id,group_id,starts_on) SELECT $1,$2,'2026-09-01' WHERE NOT EXISTS(SELECT 1 FROM headman_assignments WHERE user_id=$1 AND group_id=$2)",[head.id,group]);}
- for(const [course,weekday,url] of [['Базы данных',0,'https://my.mts-link.ru/j/178132245/24598709786'],['Практикум программирования на Python',4,'https://my.mts-link.ru/j/178459277/24895821464'],['Практикум программирования на Python',5,'https://my.mts-link.ru/j/178459277/24896213366']]){
+ for(const {course,weekday,url} of privateData.meetingLinks||[]){
   await c.query("INSERT INTO meeting_links(offering_id,weekday,url,provider,recordings_at_same_url) VALUES($1,$2,$3,'МТС Линк',true) ON CONFLICT(offering_id,weekday) DO UPDATE SET url=EXCLUDED.url,recordings_at_same_url=true",[offers[course],weekday,url]);
   if(weekday===0)await c.query("UPDATE offerings SET current_meeting_url=$2,provider='МТС Линк' WHERE id=$1",[offers[course],url]);
  }
